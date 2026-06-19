@@ -8,6 +8,9 @@ enum AppNotificationType {
   projectApprovalRequest, // Admin nhận: owner yêu cầu tạo project
   projectApproved,        // Owner nhận: admin đã duyệt
   projectRejected,        // Owner nhận: admin từ chối
+  workerCheckin,
+  logbookEntry,
+  treeData,
   general,
 }
 
@@ -96,6 +99,12 @@ String notificationTypeToString(AppNotificationType type) {
       return 'project_approved';
     case AppNotificationType.projectRejected:
       return 'project_rejected';
+    case AppNotificationType.workerCheckin:
+      return 'worker_checkin';
+    case AppNotificationType.logbookEntry:
+      return 'logbook_entry';
+    case AppNotificationType.treeData:
+      return 'tree_data';
     case AppNotificationType.general:
       return 'general';
   }
@@ -117,6 +126,12 @@ AppNotificationType notificationTypeFromString(String value) {
       return AppNotificationType.projectApproved;
     case 'project_rejected':
       return AppNotificationType.projectRejected;
+    case 'worker_checkin':
+      return AppNotificationType.workerCheckin;
+    case 'logbook_entry':
+      return AppNotificationType.logbookEntry;
+    case 'tree_data':
+      return AppNotificationType.treeData;
     default:
       return AppNotificationType.general;
   }
@@ -138,6 +153,12 @@ String notificationTypeLabel(AppNotificationType type) {
       return 'Dự án được duyệt';
     case AppNotificationType.projectRejected:
       return 'Dự án bị từ chối';
+    case AppNotificationType.workerCheckin:
+      return 'Check-in vị trí';
+    case AppNotificationType.logbookEntry:
+      return 'Nhật ký công việc';
+    case AppNotificationType.treeData:
+      return 'Dữ liệu điều tra rừng';
     case AppNotificationType.general:
       return 'Thông báo';
   }

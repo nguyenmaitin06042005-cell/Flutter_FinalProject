@@ -1370,6 +1370,24 @@ _NotificationVisualData _notificationVisual(AppNotificationType type) {
         foreground: Color(0xffc53d3d),
         background: Color(0xffffe4e4),
       );
+    case AppNotificationType.workerCheckin:
+      return const _NotificationVisualData(
+        icon: Icons.location_on_outlined,
+        foreground: Color(0xff2563eb),
+        background: Color(0xffeff6ff),
+      );
+    case AppNotificationType.logbookEntry:
+      return const _NotificationVisualData(
+        icon: Icons.menu_book_outlined,
+        foreground: Color(0xff0ea5e9),
+        background: Color(0xfff0f9ff),
+      );
+    case AppNotificationType.treeData:
+      return const _NotificationVisualData(
+        icon: Icons.park_outlined,
+        foreground: Color(0xff16a34a),
+        background: Color(0xfff0fdf4),
+      );
     case AppNotificationType.general:
       return const _NotificationVisualData(
         icon: Icons.notifications_none,
