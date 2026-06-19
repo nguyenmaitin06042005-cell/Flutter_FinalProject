@@ -372,28 +372,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
           ),
         );
 
-        final addButton = SizedBox(
-          height: 42,
-          child: ElevatedButton.icon(
-            onPressed: () => _showCalculationDialog(),
-            icon: const Icon(Icons.add, size: 17),
-            label: const Text(
-              'New Calculation',
-              maxLines: 1,
-              style: TextStyle(fontSize: 13),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(5),
-              ),
-            ),
-          ),
-        );
-
         if (compact) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -406,7 +384,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                 children: [
                   projectFilter,
                   configButton,
-                  if (_isOwner) addButton,
                 ],
               ),
             ],
@@ -420,8 +397,7 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
             projectFilter,
             const SizedBox(width: 10),
             configButton,
-            if (_isOwner) ...[const Spacer(), addButton]
-            else const Spacer(),
+            const Spacer(),
           ],
         );
       },
@@ -484,8 +460,7 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                         3: FlexColumnWidth(0.95),
                         4: FlexColumnWidth(1.05),
                         5: FlexColumnWidth(0.95),
-                        6: FlexColumnWidth(0.80),
-                        7: FixedColumnWidth(44),
+                        6: FixedColumnWidth(44),
                       }
                     : const <int, TableColumnWidth>{
                         0: FlexColumnWidth(1.05),
@@ -493,8 +468,7 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                         2: FlexColumnWidth(0.95),
                         3: FlexColumnWidth(1.05),
                         4: FlexColumnWidth(0.95),
-                        5: FlexColumnWidth(0.80),
-                        6: FixedColumnWidth(44),
+                        5: FixedColumnWidth(44),
                       },
                 children: <TableRow>[
                   TableRow(
@@ -508,7 +482,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                       _calculationHeaderCell('Calculation Date'),
                       _calculationHeaderCell('Method'),
                       _calculationHeaderCell('Total CO₂e'),
-                      _calculationHeaderCell('Status'),
                       _calculationHeaderCell(''),
                     ],
                   ),
@@ -563,19 +536,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                           textAlign: TextAlign.center,
                           onTap: () => _selectCalculation(record),
                         ),
-                        InkWell(
-                          onTap: () => _selectCalculation(record),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 3,
-                              vertical: 12,
-                            ),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: _statusBadge(record.status),
-                            ),
-                          ),
-                        ),
                         Center(
                           child: PopupMenuButton<String>(
                             tooltip: 'Actions',
@@ -596,11 +556,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                                 value: 'view',
                                 child: Text('View detail'),
                               ),
-                              if (_isOwner)
-                                const PopupMenuItem(
-                                  value: 'edit',
-                                  child: Text('Edit'),
-                                ),
                               if (_isOwner)
                                 const PopupMenuItem(
                                   value: 'delete',
@@ -752,7 +707,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                     'CO₂e',
                     '${_formatNumber(record.co2EquivalentTon)} tCO₂e',
                   ),
-                  _summaryRow('Status', record.status),
                 ],
               ),
             ),
@@ -1705,7 +1659,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
                     'CO₂ Equivalent',
                     '${_formatNumber(record.co2EquivalentTon)} tCO₂e',
                   ),
-                  _dialogInfo('Status', record.status),
                 ],
               ),
             ),
@@ -1715,18 +1668,6 @@ class _CarbonCalculationPageState extends State<CarbonCalculationPage> {
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'),
             ),
-            if (_isOwner)
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _showCalculationDialog(record: record);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Edit'),
-              ),
           ],
         );
       },

@@ -246,6 +246,7 @@ class _MainLayoutState extends State<MainLayout> {
       {
         'menu': menus[0],
         'page': DashboardPage(
+          currentUser: widget.userModel,
           onOpenNotifications: _openNotificationsPage,
         ),
       }, // Dashboard
@@ -259,9 +260,12 @@ class _MainLayoutState extends State<MainLayout> {
       {'menu': menus[3], 'page': MapPage(currentUser: widget.userModel)}, // Map
       {
         'menu': menus[4],
-        'page': const ForestInventoryPage()
+        'page': ForestInventoryPage(currentUser: widget.userModel)
       }, // Forest Inventory
-      {'menu': menus[5], 'page': const ForestLogbookPage()}, // Forest Logbook
+      {
+        'menu': menus[5],
+        'page': ForestLogbookPage(currentUser: widget.userModel),
+      }, // Forest Logbook
       {
         'menu': menus[6],
         'page': CarbonCalculationPage(currentUser: widget.userModel)

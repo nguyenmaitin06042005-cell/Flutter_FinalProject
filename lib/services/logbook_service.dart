@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../models/activity_model.dart';
@@ -97,6 +96,57 @@ class LogbookService {
 
     // 2. Delete from Firestore
     await _db.collection(_collection).doc(activity.id).delete();
+  }
+
+  /// Xóa tất cả activities (và ảnh Storage) thuộc về một project (theo tên project).
+  /// Được gọi khi xóa forest project để đảm bảo dữ liệu đồng bộ.
+  Future<void> deleteActivitiesByProjectName(String projectName) async {
+    if (projectName.trim().isEmpty) return;
+
+    final snapshot = await _db
+        .collection(_collection)
+        .where('project', isEqualTo: projectName.trim())
+        .get();
+
+    if (snapshot.docs.isEmpty) return;
+
+    // Xóa ảnh từ Storage trước
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final photos = data['photos'] as List<dynamic>?;
+      if (photos != null) {
+        for (final photo in photos) {
+          final storagePath = (photo as Map<String, dynamic>)['storagePath'] as String?;
+          if (storagePath != null && storagePath.isNotEmpty) {
+            try {
+              await _storage.ref().child(storagePath).delete();
+            } catch (e) {
+              // Bỏ qua nếu ảnh đã bị xóa hoặc lỗi
+              print('Error deleting photo from storage: $e');
+            }
+          }
+        }
+      }
+    }
+
+    // Xóa documents từ Firestore bằng batch
+    WriteBatch batch = _db.batch();
+    int operationCount = 0;
+
+    for (final doc in snapshot.docs) {
+      batch.delete(doc.reference);
+      operationCount++;
+
+      if (operationCount >= 450) {
+        await batch.commit();
+        batch = _db.batch();
+        operationCount = 0;
+      }
+    }
+
+    if (operationCount > 0) {
+      await batch.commit();
+    }
   }
 
   // ============================================================

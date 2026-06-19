@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../models/user_model.dart';
 import '../services/dashboard_service.dart';
 import '../widgets/app_colors.dart';
 import '../widgets/notification_bell.dart';
@@ -10,9 +11,11 @@ import '../widgets/notification_bell.dart';
 class DashboardPage extends StatefulWidget {
   const DashboardPage({
     super.key,
+    required this.currentUser,
     required this.onOpenNotifications,
   });
 
+  final UserModel currentUser;
   final VoidCallback onOpenNotifications;
 
   @override
@@ -42,6 +45,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void _refreshDashboardStream() {
     _dashboardStream = _dashboardService.watchDashboard(
       _selectedDateRange,
+      widget.currentUser,
     );
   }
 
@@ -112,6 +116,10 @@ class _DashboardPageState extends State<DashboardPage> {
                             totalArea: data.totalAreaHa,
                           ),
                           SizedBox(height: sectionGap),
+                          _RecentActivitiesCard(
+                            activities: data.recentActivities,
+                          ),
+                          SizedBox(height: sectionGap),
                           _CarbonByProjectCard(
                             values: data.carbonByProject,
                           ),
@@ -119,61 +127,36 @@ class _DashboardPageState extends State<DashboardPage> {
                       );
                     }
 
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    return Column(
                       children: <Widget>[
-                        Expanded(
-                          flex: 5,
-                          child: _AreaByProvinceCard(
-                            values: data.areaByProvince,
-                            totalArea: data.totalAreaHa,
-                          ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Expanded(
+                              flex: 5,
+                              child: _AreaByProvinceCard(
+                                values: data.areaByProvince,
+                                totalArea: data.totalAreaHa,
+                              ),
+                            ),
+                            SizedBox(width: sectionGap),
+                            Expanded(
+                              flex: 6,
+                              child: _RecentActivitiesCard(
+                                activities: data.recentActivities,
+                              ),
+                            ),
+                          ],
                         ),
-                        SizedBox(width: sectionGap),
-                        Expanded(
-                          flex: 6,
-                          child: _CarbonByProjectCard(
-                            values: data.carbonByProject,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                SizedBox(height: sectionGap),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final stacked = constraints.maxWidth < 980;
-
-                    if (stacked) {
-                      return Column(
-                        children: <Widget>[
-                          _RecentActivitiesCard(
-                            activities: data.recentActivities,
-                          ),
-                          SizedBox(height: sectionGap),
-                          _ProjectMapOverview(
-                            points: data.projectPoints,
-                          ),
-                        ],
-                      );
-                    }
-
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Expanded(
-                          flex: 6,
-                          child: _RecentActivitiesCard(
-                            activities: data.recentActivities,
-                          ),
-                        ),
-                        SizedBox(width: sectionGap),
-                        Expanded(
-                          flex: 5,
-                          child: _ProjectMapOverview(
-                            points: data.projectPoints,
-                          ),
+                        SizedBox(height: sectionGap),
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: _CarbonByProjectCard(
+                                values: data.carbonByProject,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     );
@@ -879,12 +862,25 @@ class _LegendRow extends StatelessWidget {
   }
 }
 
-class _CarbonByProjectCard extends StatelessWidget {
+class _CarbonByProjectCard extends StatefulWidget {
   const _CarbonByProjectCard({
     required this.values,
   });
 
   final List<DashboardProjectCarbon> values;
+
+  @override
+  State<_CarbonByProjectCard> createState() => _CarbonByProjectCardState();
+}
+
+class _CarbonByProjectCardState extends State<_CarbonByProjectCard> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -901,20 +897,20 @@ class _CarbonByProjectCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
-          if (values.isEmpty)
+          if (widget.values.isEmpty)
             const _EmptyChart(
               message: 'Chưa có dữ liệu carbon theo dự án.',
             )
           else
             LayoutBuilder(
               builder: (context, constraints) {
-                final maxValue = values
+                final maxValue = widget.values
                     .map((item) => item.co2eTon)
                     .fold<double>(0, math.max);
 
                 if (constraints.maxWidth < 560) {
                   return Column(
-                    children: values.map((item) {
+                    children: widget.values.map((item) {
                       final progress =
                           maxValue <= 0 ? 0.0 : item.co2eTon / maxValue;
 
@@ -972,68 +968,96 @@ class _CarbonByProjectCard extends StatelessWidget {
                   );
                 }
 
-                return SizedBox(
+                final useScroll = widget.values.length > 5;
+                final itemWidth = useScroll ? constraints.maxWidth / 5.5 : constraints.maxWidth / widget.values.length;
+
+                final chartContent = SizedBox(
                   height: 220,
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
-                    children: values.map((item) {
+                    children: widget.values.map((item) {
                       final barHeight =
                           maxValue <= 0 ? 0.0 : item.co2eTon / maxValue * 175;
 
-                      return Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: <Widget>[
-                              Text(
-                                _formatCompactNumber(
-                                  item.co2eTon,
+                      final child = Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: <Widget>[
+                            Text(
+                              _formatCompactNumber(
+                                item.co2eTon,
+                              ),
+                              maxLines: 1,
+                              style: const TextStyle(
+                                fontSize: 9.0,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xff354239),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            AnimatedContainer(
+                              duration: const Duration(
+                                milliseconds: 350,
+                              ),
+                              height: math.max(barHeight, 4),
+                              decoration: BoxDecoration(
+                                color: AppColors.primary,
+                                borderRadius: const BorderRadius.vertical(
+                                  top: Radius.circular(7),
                                 ),
-                                maxLines: 1,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Tooltip(
+                              message: item.projectName,
+                              child: Text(
+                                item.projectName,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
                                 style: const TextStyle(
-                                  fontSize: 9.0,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xff354239),
+                                  fontSize: 9.5,
+                                  height: 1.2,
+                                  color: Color(0xff5f6c64),
                                 ),
                               ),
-                              const SizedBox(height: 6),
-                              AnimatedContainer(
-                                duration: const Duration(
-                                  milliseconds: 350,
-                                ),
-                                height: math.max(barHeight, 4),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary,
-                                  borderRadius: const BorderRadius.vertical(
-                                    top: Radius.circular(7),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Tooltip(
-                                message: item.projectName,
-                                child: Text(
-                                  item.projectName,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 9.5,
-                                    height: 1.2,
-                                    color: Color(0xff5f6c64),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       );
+
+                      if (useScroll) {
+                        return SizedBox(
+                          width: itemWidth,
+                          child: child,
+                        );
+                      }
+
+                      return Expanded(child: child);
                     }).toList(),
                   ),
                 );
+
+                if (useScroll) {
+                  return Scrollbar(
+                    controller: _scrollController,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _scrollController,
+                      scrollDirection: Axis.horizontal,
+                      physics: const ClampingScrollPhysics(),
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 14),
+                        child: chartContent,
+                      ),
+                    ),
+                  );
+                }
+
+                return chartContent;
               },
             ),
         ],
@@ -1245,173 +1269,6 @@ class _TableCell extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ProjectMapOverview extends StatelessWidget {
-  const _ProjectMapOverview({
-    required this.points,
-  });
-
-  final List<DashboardProjectPoint> points;
-
-  @override
-  Widget build(BuildContext context) {
-    return _DashboardCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const Text(
-            'Project Map Overview',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w900,
-              color: AppColors.text,
-            ),
-          ),
-          const SizedBox(height: 14),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final mapHeight = constraints.maxWidth < 520 ? 200.0 : 225.0;
-
-              return Container(
-                height: mapHeight,
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: const LinearGradient(
-                    colors: <Color>[
-                      Color(0xff0b5d38),
-                      Color(0xff113d2c),
-                    ],
-                  ),
-                ),
-                child: points.isEmpty
-                    ? const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(18),
-                          child: Text(
-                            'Chưa có latitude/longitude trong '
-                            'forest_projects để hiển thị vị trí.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      )
-                    : LayoutBuilder(
-                        builder: (context, constraints) {
-                          final latitudes =
-                              points.map((point) => point.latitude).toList();
-                          final longitudes =
-                              points.map((point) => point.longitude).toList();
-
-                          final minLat = latitudes.reduce(math.min);
-                          final maxLat = latitudes.reduce(math.max);
-                          final minLng = longitudes.reduce(math.min);
-                          final maxLng = longitudes.reduce(math.max);
-
-                          return Stack(
-                            children: <Widget>[
-                              Positioned.fill(
-                                child: CustomPaint(
-                                  painter: _MapGridPainter(),
-                                ),
-                              ),
-                              ...points.map((point) {
-                                final xRange = math.max(maxLng - minLng, 0.01);
-                                final yRange = math.max(maxLat - minLat, 0.01);
-
-                                final left = 22 +
-                                    (point.longitude - minLng) /
-                                        xRange *
-                                        (constraints.maxWidth - 64);
-                                final top = 22 +
-                                    (maxLat - point.latitude) /
-                                        yRange *
-                                        (constraints.maxHeight - 64);
-
-                                return Positioned(
-                                  left: left,
-                                  top: top,
-                                  child: Tooltip(
-                                    message: point.projectName,
-                                    child: const Icon(
-                                      Icons.location_on,
-                                      color: Colors.white,
-                                      size: 34,
-                                    ),
-                                  ),
-                                );
-                              }),
-                              Positioned(
-                                right: 12,
-                                bottom: 12,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 7,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '${points.length} project(s)',
-                                    style: const TextStyle(
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.text,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MapGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final linePaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5
-      ..color = Colors.white.withOpacity(0.12);
-
-    for (int index = 1; index < 8; index++) {
-      final y = size.height / 8 * index;
-      canvas.drawLine(
-        Offset(0, y),
-        Offset(size.width, y),
-        linePaint,
-      );
-    }
-
-    for (int index = 1; index < 10; index++) {
-      final x = size.width / 10 * index;
-      canvas.drawLine(
-        Offset(x, 0),
-        Offset(x, size.height),
-        linePaint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(
-    covariant CustomPainter oldDelegate,
-  ) =>
-      false;
 }
 
 class _DashboardCard extends StatelessWidget {

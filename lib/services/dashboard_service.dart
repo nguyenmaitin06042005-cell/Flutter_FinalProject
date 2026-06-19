@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../models/user_model.dart';
+
 class DashboardProvinceArea {
   final String province;
   final double areaHa;
@@ -95,7 +97,7 @@ class DashboardService {
 
   final FirebaseFirestore _firestore;
 
-  Stream<DashboardData> watchDashboard(DateTimeRange range) {
+  Stream<DashboardData> watchDashboard(DateTimeRange range, [UserModel? currentUser]) {
     late StreamController<DashboardData> controller;
     final subscriptions = <StreamSubscription<dynamic>>[];
 
@@ -123,6 +125,7 @@ class DashboardService {
           inventory: inventory,
           calculations: calculations,
           activities: activities,
+          currentUser: currentUser,
         ),
       );
     }
@@ -185,10 +188,10 @@ class DashboardService {
         subscriptions.add(
           _watchFirstAvailableCollection(
             const <String>[
+              'logbook_activities',
               'forest_activities',
               'activities',
               'forest_logbook',
-              'logbook_activities',
             ],
           ).listen(
             (snapshot) {
@@ -241,8 +244,23 @@ class DashboardService {
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> inventory,
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> calculations,
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> activities,
+    UserModel? currentUser,
   }) {
+    final bool isOwner = currentUser?.isOwner ?? false;
+    final String ownerUid = currentUser?.uid ?? '';
+
+    Set<String> allowedProjects = {};
+    if (isOwner) {
+      allowedProjects = projects
+          .where((document) => _readString(document.data(), ['ownerUid']) == ownerUid)
+          .map((document) => _projectName(document.data()))
+          .toSet();
+    }
+
     final filteredOwners = owners.where((document) {
+      if (isOwner) {
+        if (document.id != ownerUid) return false;
+      }
       return _matchesDate(
         document.data(),
         const <String>['createdAt', 'updatedAt', 'date'],
@@ -252,6 +270,9 @@ class DashboardService {
     }).toList();
 
     final filteredProjects = projects.where((document) {
+      if (isOwner) {
+        if (_readString(document.data(), ['ownerUid']) != ownerUid) return false;
+      }
       return _matchesDate(
         document.data(),
         const <String>['createdAt', 'updatedAt', 'date'],
@@ -261,6 +282,7 @@ class DashboardService {
     }).toList();
 
     final filteredInventory = inventory.where((document) {
+      if (isOwner && !allowedProjects.contains(_projectName(document.data()))) return false;
       return _matchesDate(
         document.data(),
         const <String>[
@@ -275,6 +297,7 @@ class DashboardService {
     }).toList();
 
     final filteredCalculations = calculations.where((document) {
+      if (isOwner && !allowedProjects.contains(_projectName(document.data()))) return false;
       return _matchesDate(
         document.data(),
         const <String>[
@@ -289,6 +312,7 @@ class DashboardService {
     }).toList();
 
     final filteredActivities = activities.where((document) {
+      if (isOwner && !allowedProjects.contains(_projectName(document.data()))) return false;
       return _matchesDate(
         document.data(),
         const <String>[
@@ -435,8 +459,8 @@ class DashboardService {
         user: _readString(
           data,
           const <String>[
-            'user',
             'userName',
+            'user',
             'worker',
             'createdBy',
           ],
@@ -467,7 +491,7 @@ class DashboardService {
       totalTrees: totalTrees,
       estimatedCarbonTon: totalCarbon,
       areaByProvince: provinceAreas,
-      carbonByProject: carbonByProject.take(6).toList(),
+      carbonByProject: carbonByProject.toList(),
       recentActivities: recentActivities.take(6).toList(),
       projectPoints: points.take(20).toList(),
     );

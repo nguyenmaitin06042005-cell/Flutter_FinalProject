@@ -4,7 +4,10 @@ import 'package:flutter/material.dart';
 import '../models/forest_project_model.dart';
 import '../models/project_request_model.dart';
 import '../models/user_model.dart';
+import '../services/carbon_service.dart';
 import '../services/forest_project_service.dart';
+import '../services/inventory_service.dart';
+import '../services/logbook_service.dart';
 import '../services/notification_service.dart';
 import '../services/project_request_service.dart';
 import '../services/user_service.dart';
@@ -20,6 +23,9 @@ class ForestProjectsPage extends StatefulWidget {
 
 class _ForestProjectsPageState extends State<ForestProjectsPage> {
   final ForestProjectService _service = ForestProjectService();
+  final CarbonService _carbonService = CarbonService();
+  final InventoryService _inventoryService = InventoryService();
+  final LogbookService _logbookService = LogbookService();
   final NotificationService _notificationService = NotificationService();
   final ProjectRequestService _requestService = ProjectRequestService();
   final UserService _userService = UserService();
@@ -415,10 +421,25 @@ class _ForestProjectsPageState extends State<ForestProjectsPage> {
                           );
                           if (confirm == true && mounted) {
                             try {
+                              // Xóa tất cả dữ liệu liên quan trước khi xóa project
+                              await Future.wait([
+                                _carbonService.deleteCalculationsByProjectName(p.projectName),
+                                _inventoryService.deletePlotsByProjectName(p.projectName),
+                                _logbookService.deleteActivitiesByProjectName(p.projectName),
+                              ]);
+                              // Sau đó xóa project
                               await _service.deleteProject(p.id);
                               if (mounted) {
+                                setState(() {
+                                  if (_selectedProject?.id == p.id) {
+                                    _selectedProject = null;
+                                  }
+                                });
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('✓ Đã xóa dự án.'), backgroundColor: Color(0xff168a45)),
+                                  const SnackBar(
+                                    content: Text('✓ Đã xóa dự án và tất cả dữ liệu liên quan (inventory, logbook, carbon).'),
+                                    backgroundColor: Color(0xff168a45),
+                                  ),
                                 );
                               }
                             } catch (e) {

@@ -60,6 +60,60 @@ class InventoryService {
     await _db.collection(_treesCollection).doc(treeId).delete();
   }
 
+  /// Xóa tất cả plots (và trees liên quan) thuộc về một project (theo tên project).
+  /// Được gọi khi xóa forest project để đảm bảo dữ liệu đồng bộ.
+  Future<void> deletePlotsByProjectName(String projectName) async {
+    if (projectName.trim().isEmpty) return;
+
+    // 1. Tìm tất cả plots thuộc project này
+    final plotsSnapshot = await _db
+        .collection(_plotsCollection)
+        .where('project', isEqualTo: projectName.trim())
+        .get();
+
+    if (plotsSnapshot.docs.isEmpty) return;
+
+    // 2. Với mỗi plot, xóa trees liên quan rồi xóa plot
+    // Firestore batch giới hạn 500 operations, nên chia batch nếu cần
+    WriteBatch batch = _db.batch();
+    int operationCount = 0;
+
+    for (final plotDoc in plotsSnapshot.docs) {
+      // Xóa trees thuộc plot này
+      final treesSnapshot = await _db
+          .collection(_treesCollection)
+          .where('plotId', isEqualTo: plotDoc.id)
+          .get();
+
+      for (final treeDoc in treesSnapshot.docs) {
+        batch.delete(treeDoc.reference);
+        operationCount++;
+
+        // Commit batch nếu đạt giới hạn 450 (để chừa chỗ cho plot)
+        if (operationCount >= 450) {
+          await batch.commit();
+          batch = _db.batch();
+          operationCount = 0;
+        }
+      }
+
+      // Xóa plot
+      batch.delete(plotDoc.reference);
+      operationCount++;
+
+      if (operationCount >= 450) {
+        await batch.commit();
+        batch = _db.batch();
+        operationCount = 0;
+      }
+    }
+
+    // Commit batch cuối cùng nếu còn operations
+    if (operationCount > 0) {
+      await batch.commit();
+    }
+  }
+
   Stream<List<TreeModel>> getTreesStream() {
     return _db
         .collection(_treesCollection)

@@ -1,17 +1,18 @@
-import 'dart:typed_data';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../models/activity_model.dart';
+import '../services/forest_project_service.dart';
 import '../services/logbook_service.dart';
 import '../services/notification_service.dart';
 import '../services/user_service.dart';
+import '../models/user_model.dart';
 import '../widgets/app_colors.dart';
 import 'dart:async';
 
 class ForestLogbookPage extends StatefulWidget {
-  const ForestLogbookPage({super.key});
+  final UserModel currentUser;
+  const ForestLogbookPage({super.key, required this.currentUser});
 
   @override
   State<ForestLogbookPage> createState() => _ForestLogbookPageState();
@@ -29,11 +30,16 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
   final LogbookService _logbookService = LogbookService();
   final NotificationService _notificationService = NotificationService();
   final UserService _userService = UserService();
+  final ForestProjectService _forestProjectService = ForestProjectService();
   final Map<String, String> _userNames = {};
   
   StreamSubscription? _subscription;
+  StreamSubscription? _projectsSub;
   List<ActivityRecord> _activities = [];
+  List<String> _projectNames = [];
   bool _isLoading = true;
+
+  bool get _isOwner => widget.currentUser.isOwner;
 
   Future<void> _loadUserNames(List<ActivityRecord> activities) async {
     bool updated = false;
@@ -78,20 +84,7 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
         setState(() {
           _activities = data;
           _loadUserNames(data);
-
-          if (_activities.isEmpty) {
-            _selectedActivity = null;
-          } else {
-            final selectedId = _selectedActivity?.id;
-            final selectedIndex = _activities.indexWhere(
-              (item) => item.id == selectedId,
-            );
-
-            _selectedActivity = selectedIndex >= 0
-                ? _activities[selectedIndex]
-                : _activities.first;
-          }
-
+          _updateSelectedActivity();
           _isLoading = false;
         });
       },
@@ -118,11 +111,55 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
         });
       },
     );
+
+    // Lấy danh sách project động từ Firebase
+    final projectStream = _isOwner
+        ? _forestProjectService.watchProjectsByOwner(widget.currentUser.uid)
+        : _forestProjectService.watchProjects();
+    _projectsSub = projectStream.listen((projects) {
+      if (mounted) {
+        setState(() {
+          _projectNames = projects
+              .map((p) => p.projectName.trim())
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
+          _updateSelectedActivity();
+        });
+      }
+    });
+  }
+
+  void _updateSelectedActivity() {
+    if (_activities.isEmpty) {
+      _selectedActivity = null;
+      return;
+    }
+
+    final validActivities = _isOwner 
+        ? _activities.where((a) => _projectNames.contains(a.project)).toList()
+        : _activities;
+
+    if (validActivities.isEmpty) {
+      _selectedActivity = null;
+      return;
+    }
+
+    final selectedId = _selectedActivity?.id;
+    final selectedIndex = validActivities.indexWhere(
+      (item) => item.id == selectedId,
+    );
+
+    _selectedActivity = selectedIndex >= 0
+        ? validActivities[selectedIndex]
+        : validActivities.first;
   }
 
   @override
   void dispose() {
     _subscription?.cancel();
+    _projectsSub?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -151,7 +188,11 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
   List<WeekOption> get _weekOptions {
     final starts = <DateTime>{_startOfWeek(DateTime.now())};
 
-    for (final activity in _activities) {
+    final validActivities = _isOwner 
+        ? _activities.where((a) => _projectNames.contains(a.project))
+        : _activities;
+
+    for (final activity in validActivities) {
       starts.add(_startOfWeek(activity.date));
     }
 
@@ -170,6 +211,8 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
     final keyword = _searchController.text.trim().toLowerCase();
 
     return _activities.where((activity) {
+      if (_isOwner && !_projectNames.contains(activity.project)) return false;
+
       final matchesSearch = keyword.isEmpty ||
           activity.user.toLowerCase().contains(keyword) ||
           activity.location.toLowerCase().contains(keyword) ||
@@ -262,11 +305,13 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
     final safeSelectedWeek =
         selectedWeekExists ? _selectedWeekKey : 'ALL_WEEKS';
 
-    final projectOptions = _activities
-        .map((activity) => activity.project)
-        .toSet()
-        .toList()
-      ..sort();
+    final projectOptions = _isOwner 
+        ? _projectNames
+        : _activities
+            .map((activity) => activity.project)
+            .toSet()
+            .toList()
+          ..sort();
 
     final safeSelectedProject = _selectedProject == 'All Projects' ||
             projectOptions.contains(_selectedProject)
@@ -956,7 +1001,19 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
     final isEditing = activity != null;
 
     String activityType = _normalizeActivityType(activity?.activityType ?? 'Planting');
-    String project = activity?.project ?? 'Dak Lak Project 01';
+
+    // Lấy danh sách project động, bao gồm cả project hiện tại của activity (nếu đang edit)
+    final allProjectNames = <String>{
+      ..._projectNames,
+      ..._activities.map((a) => a.project.trim()).where((n) => n.isNotEmpty),
+    }.toList()..sort();
+
+    String project = activity?.project ?? (allProjectNames.isNotEmpty ? allProjectNames.first : '');
+    // Đảm bảo project nằm trong danh sách
+    if (!allProjectNames.contains(project) && project.isNotEmpty) {
+      allProjectNames.add(project);
+      allProjectNames.sort();
+    }
 
     final userController = TextEditingController(text: activity?.user ?? '');
     final locationController = TextEditingController(
@@ -1073,36 +1130,35 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: DropdownButtonFormField<String>(
-                              value: project,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Project',
-                                border: OutlineInputBorder(),
-                              ),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'Dak Lak Project 01',
-                                  child: Text('Dak Lak Project 01'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Lam Dong Project 02',
-                                  child: Text('Lam Dong Project 02'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Gia Lai Project 01',
-                                  child: Text('Gia Lai Project 01'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Quang Tri Project 01',
-                                  child: Text('Quang Tri Project 01'),
-                                ),
-                              ],
-                              onChanged: (value) {
-                                if (value == null) return;
-                                dialogSetState(() => project = value);
-                              },
-                            ),
+                            child: allProjectNames.isEmpty
+                                ? const InputDecorator(
+                                    decoration: InputDecoration(
+                                      labelText: 'Project',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    child: Text(
+                                      'Chưa có dự án',
+                                      style: TextStyle(color: Colors.red),
+                                    ),
+                                  )
+                                : DropdownButtonFormField<String>(
+                                    value: project.isNotEmpty ? project : null,
+                                    isExpanded: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Project',
+                                      border: OutlineInputBorder(),
+                                    ),
+                                    items: allProjectNames
+                                        .map((p) => DropdownMenuItem(
+                                              value: p,
+                                              child: Text(p),
+                                            ))
+                                        .toList(),
+                                    onChanged: (value) {
+                                      if (value == null) return;
+                                      dialogSetState(() => project = value);
+                                    },
+                                  ),
                           ),
                         ],
                       ),

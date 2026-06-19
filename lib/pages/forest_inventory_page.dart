@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import '../models/inventory_model.dart';
+import '../models/user_model.dart';
 import '../services/inventory_service.dart';
+import '../services/forest_project_service.dart';
+import '../services/carbon_service.dart';
 import '../widgets/app_colors.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/notification_service.dart';
 import '../models/app_notification_model.dart';
 class ForestInventoryPage extends StatefulWidget {
-  const ForestInventoryPage({super.key});
+  final UserModel currentUser;
+  const ForestInventoryPage({super.key, required this.currentUser});
 
   @override
   State<ForestInventoryPage> createState() => _ForestInventoryPageState();
@@ -24,12 +28,26 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
   PlotModel? _selectedPlot;
 
   final InventoryService _inventoryService = InventoryService();
+  final ForestProjectService _forestProjectService = ForestProjectService();
+  final CarbonService _carbonService = CarbonService();
   StreamSubscription? _plotsSub;
   StreamSubscription? _treesSub;
+  StreamSubscription? _projectsSub;
 
   List<PlotModel> _plots = [];
   List<TreeModel> _treeData = [];
+  List<String> _projectNames = [];
   bool _isLoading = true;
+
+  bool get _isAdmin => widget.currentUser.isAdmin;
+  bool get _isOwner => widget.currentUser.isOwner;
+
+  /// Species factor map dùng cho auto-calculate Carbon
+  final Map<String, double> _speciesFactors = {
+    'Keo': 0.48,
+    'Bạch đàn': 0.47,
+    'Thông': 0.50,
+  };
 
   @override
   void initState() {
@@ -38,9 +56,7 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
       if (mounted) {
         setState(() {
           _plots = data;
-          if (_plots.isNotEmpty && _selectedPlot == null) {
-            _selectedPlot = _plots.first;
-          }
+          _updateSelectedPlot();
           _isLoading = false;
         });
       }
@@ -53,12 +69,56 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
         });
       }
     });
+
+    // Lấy danh sách project động từ Firebase
+    final projectStream = _isOwner
+        ? _forestProjectService.watchProjectsByOwner(widget.currentUser.uid)
+        : _forestProjectService.watchProjects();
+    _projectsSub = projectStream.listen((projects) {
+      if (mounted) {
+        setState(() {
+          _projectNames = projects
+              .map((p) => p.projectName.trim())
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
+          _updateSelectedPlot();
+        });
+      }
+    });
+  }
+
+  void _updateSelectedPlot() {
+    if (_plots.isEmpty) {
+      _selectedPlot = null;
+      return;
+    }
+
+    final validPlots = _isOwner 
+        ? _plots.where((p) => _projectNames.contains(p.project)).toList()
+        : _plots;
+
+    if (validPlots.isEmpty) {
+      _selectedPlot = null;
+      return;
+    }
+
+    final selectedId = _selectedPlot?.id;
+    final selectedIndex = validPlots.indexWhere(
+      (item) => item.id == selectedId,
+    );
+
+    _selectedPlot = selectedIndex >= 0
+        ? validPlots[selectedIndex]
+        : validPlots.first;
   }
 
   @override
   void dispose() {
     _plotsSub?.cancel();
     _treesSub?.cancel();
+    _projectsSub?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -67,6 +127,8 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
     final keyword = _searchController.text.trim().toLowerCase();
 
     return _plots.where((plot) {
+      if (_isOwner && !_projectNames.contains(plot.project)) return false;
+
       final matchesKeyword =
           keyword.isEmpty ||
           plot.code.toLowerCase().contains(keyword) ||
@@ -91,6 +153,8 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
         (item) => item.code == tree.plotCode,
         orElse: () => const PlotModel(code: '', project: '', area: 0, latitude: 0, longitude: 0, elevation: 0, status: ''),
       );
+
+      if (_isOwner && !_projectNames.contains(plot.project)) return false;
 
       final matchesKeyword =
           keyword.isEmpty ||
@@ -238,47 +302,33 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
           ),
         );
 
+        final allProjectNames = <String>{
+          ..._projectNames,
+          ..._plots.map((p) => p.project.trim()).where((n) => n.isNotEmpty),
+        }.toList()..sort();
+
+        final safeSelectedProject = _selectedProject == 'All Projects' ||
+                allProjectNames.contains(_selectedProject)
+            ? _selectedProject
+            : 'All Projects';
+
         final projectDropdown = SizedBox(
           width: compact ? 190 : 165,
           height: 42,
           child: DropdownButtonFormField<String>(
-            value: _selectedProject,
+            value: safeSelectedProject,
             isExpanded: true,
             decoration: _dropdownDecoration(),
-            items: const [
-              DropdownMenuItem(
-                value: 'All Projects',
-                child: Text(
-                  'All Projects',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              DropdownMenuItem(
-                value: 'Dak Lak Project 01',
-                child: Text(
-                  'Dak Lak Project 01',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              DropdownMenuItem(
-                value: 'Lam Dong Project 02',
-                child: Text(
-                  'Lam Dong Project 02',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              DropdownMenuItem(
-                value: 'Gia Lai Project 01',
-                child: Text(
-                  'Gia Lai Project 01',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
+            items: <String>['All Projects', ...allProjectNames]
+                .map((p) => DropdownMenuItem(
+                      value: p,
+                      child: Text(
+                        p,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ))
+                .toList(),
             onChanged: (value) {
               if (value == null) return;
               setState(() {
@@ -338,6 +388,9 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
           ),
         );
 
+        // Admin không được thêm Tree Data (ẩn nút khi đang ở tab Tree Data)
+        final showAddButton = !(_isAdmin && _selectedTab == 1);
+
         if (compact) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -351,7 +404,7 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
                 children: [
                   projectDropdown,
                   if (_selectedTab == 0) statusDropdown,
-                  addButton,
+                  if (showAddButton) addButton,
                 ],
               ),
             ],
@@ -367,8 +420,10 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
               const SizedBox(width: 10),
               statusDropdown,
             ],
-            const SizedBox(width: 10),
-            addButton,
+            if (showAddButton) ...[
+              const SizedBox(width: 10),
+              addButton,
+            ],
           ],
         );
       },
@@ -764,7 +819,7 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
     final longitudeController = TextEditingController();
     final elevationController = TextEditingController();
 
-    String project = 'Dak Lak Project 01';
+    String project = _projectNames.isNotEmpty ? _projectNames.first : '';
     String status = 'Active';
 
     await showDialog<void>(
@@ -785,31 +840,28 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
                         hint: 'PLT-0006',
                       ),
                       const SizedBox(height: 14),
-                      DropdownButtonFormField<String>(
-                        value: project,
-                        decoration: const InputDecoration(
-                          labelText: 'Project',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'Dak Lak Project 01',
-                            child: Text('Dak Lak Project 01'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Lam Dong Project 02',
-                            child: Text('Lam Dong Project 02'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Gia Lai Project 01',
-                            child: Text('Gia Lai Project 01'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) return;
-                          dialogSetState(() => project = value);
-                        },
-                      ),
+                      _projectNames.isEmpty
+                          ? const Text(
+                              'Chưa có dự án. Vui lòng tạo dự án trước.',
+                              style: TextStyle(color: Colors.red),
+                            )
+                          : DropdownButtonFormField<String>(
+                              value: project.isNotEmpty ? project : null,
+                              decoration: const InputDecoration(
+                                labelText: 'Project',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: _projectNames
+                                  .map((p) => DropdownMenuItem(
+                                        value: p,
+                                        child: Text(p),
+                                      ))
+                                  .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                dialogSetState(() => project = value);
+                              },
+                            ),
                       const SizedBox(height: 14),
                       Row(
                         children: [
@@ -1108,7 +1160,26 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
                     );
                     Navigator.pop(dialogContext);
 
-                    _inventoryService.addTree(newTree);
+                    _inventoryService.addTree(newTree).then((_) {
+                      // Tự động tạo Carbon Calculation khi thêm Tree Data
+                      final plot = _plots.firstWhere((p) => p.code == plotCode);
+                      _carbonService.autoCalculateFromTree(
+                        tree: newTree,
+                        plot: plot,
+                        ownerUid: widget.currentUser.uid,
+                        ownerName: widget.currentUser.fullName,
+                        speciesFactors: _speciesFactors,
+                      ).then((_) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã lưu Tree Data và tự động tính Carbon.'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      });
+                    });
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
@@ -1205,19 +1276,20 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'),
             ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                setState(() => _selectedTab = 1);
-                _showAddTreeDialog();
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('Add Tree Data'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
+            if (!_isAdmin)
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  setState(() => _selectedTab = 1);
+                  _showAddTreeDialog();
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Add Tree Data'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                ),
               ),
-            ),
           ],
         );
       },
