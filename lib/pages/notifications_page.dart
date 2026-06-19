@@ -1388,6 +1388,12 @@ _NotificationVisualData _notificationVisual(AppNotificationType type) {
         foreground: Color(0xff16a34a),
         background: Color(0xfff0fdf4),
       );
+    case AppNotificationType.plotUpdate:
+      return const _NotificationVisualData(
+        icon: Icons.edit_location_alt_outlined,
+        foreground: Color(0xffd97706),
+        background: Color(0xfffef3c7),
+      );
     case AppNotificationType.general:
       return const _NotificationVisualData(
         icon: Icons.notifications_none,

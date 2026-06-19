@@ -11,6 +11,7 @@ enum AppNotificationType {
   workerCheckin,
   logbookEntry,
   treeData,
+  plotUpdate,
   general,
 }
 
@@ -105,6 +106,8 @@ String notificationTypeToString(AppNotificationType type) {
       return 'logbook_entry';
     case AppNotificationType.treeData:
       return 'tree_data';
+    case AppNotificationType.plotUpdate:
+      return 'plot_update';
     case AppNotificationType.general:
       return 'general';
   }
@@ -132,6 +135,8 @@ AppNotificationType notificationTypeFromString(String value) {
       return AppNotificationType.logbookEntry;
     case 'tree_data':
       return AppNotificationType.treeData;
+    case 'plot_update':
+      return AppNotificationType.plotUpdate;
     default:
       return AppNotificationType.general;
   }
@@ -159,6 +164,8 @@ String notificationTypeLabel(AppNotificationType type) {
       return 'Nhật ký công việc';
     case AppNotificationType.treeData:
       return 'Dữ liệu điều tra rừng';
+    case AppNotificationType.plotUpdate:
+      return 'Cập nhật tọa độ ô mẫu';
     case AppNotificationType.general:
       return 'Thông báo';
   }

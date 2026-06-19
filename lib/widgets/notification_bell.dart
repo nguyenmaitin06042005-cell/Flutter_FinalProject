@@ -476,6 +476,12 @@ NotificationVisual _notificationVisual(AppNotificationType type) {
         foreground: Color(0xff16a34a),
         background: Color(0xfff0fdf4),
       );
+    case AppNotificationType.plotUpdate:
+      return const NotificationVisual(
+        icon: Icons.edit_location_alt_outlined,
+        foreground: Color(0xffd97706), // Amber-600
+        background: Color(0xfffef3c7), // Amber-100
+      );
     case AppNotificationType.general:
       return const NotificationVisual(
         icon: Icons.notifications_none,

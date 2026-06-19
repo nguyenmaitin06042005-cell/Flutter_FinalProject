@@ -3,7 +3,9 @@ import '../models/inventory_model.dart';
 import '../services/inventory_service.dart';
 import '../widgets/app_colors.dart';
 import 'dart:async';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/notification_service.dart';
+import '../models/app_notification_model.dart';
 class ForestInventoryPage extends StatefulWidget {
   const ForestInventoryPage({super.key});
 
@@ -927,15 +929,42 @@ class _ForestInventoryPageState extends State<ForestInventoryPage> {
                     );
                     Navigator.pop(dialogContext);
 
-                    _inventoryService.addPlot(newPlot).then((saved) {
+                    _inventoryService.addPlot(newPlot).then((saved) async {
                       if (mounted) {
                         setState(() {
                           _selectedPlot = saved;
                         });
                       }
-                    });
+                      
+                      try {
+                        final query = await FirebaseFirestore.instance
+                            .collection('forest_projects')
+                            .where('projectName', isEqualTo: project)
+                            .limit(1)
+                            .get();
+                        
+                        List<String> workerIds = [];
+                        if (query.docs.isNotEmpty) {
+                            final data = query.docs.first.data();
+                            if (data['workerIds'] is List) {
+                                workerIds = List<String>.from(data['workerIds']);
+                            }
+                        }
 
-                    Navigator.pop(dialogContext);
+                        if (workerIds.isNotEmpty) {
+                            await NotificationService().createNotification(
+                                title: 'Ô mẫu mới',
+                                message: 'Quản lý vừa tạo ô mẫu "$code" cho dự án "$project".',
+                                type: AppNotificationType.plotUpdate,
+                                projectName: project,
+                                referenceId: saved.id,
+                                recipientIds: workerIds,
+                            );
+                        }
+                      } catch (e) {
+                          debugPrint('Error sending plot notification: $e');
+                      }
+                    });
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
