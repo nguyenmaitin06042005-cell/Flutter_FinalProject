@@ -256,7 +256,7 @@ class _MainLayoutState extends State<MainLayout> {
           currentUser: widget.userModel,
         )
       }, // Forest Projects
-      {'menu': menus[3], 'page': const MapPage()}, // Map
+      {'menu': menus[3], 'page': MapPage(currentUser: widget.userModel)}, // Map
       {
         'menu': menus[4],
         'page': const ForestInventoryPage()

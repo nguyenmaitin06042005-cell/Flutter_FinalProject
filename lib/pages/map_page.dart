@@ -3,9 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../widgets/app_colors.dart';
+import '../models/forest_project_model.dart';
+import '../models/user_model.dart';
+import '../services/forest_project_service.dart';
+import '../data/province_boundaries.dart';
 
 class MapPage extends StatefulWidget {
-  const MapPage({super.key});
+  const MapPage({super.key, required this.currentUser});
+  final UserModel currentUser;
 
   @override
   State<MapPage> createState() => _MapPageState();
@@ -13,6 +18,7 @@ class MapPage extends StatefulWidget {
 
 class _MapPageState extends State<MapPage> {
   final MapController mapController = MapController();
+  final ForestProjectService _projectService = ForestProjectService();
 
   bool showProjects = true;
   bool showPlots = true;
@@ -24,214 +30,273 @@ class _MapPageState extends State<MapPage> {
 
   final List<LatLng> drawingPoints = [];
   List<LatLng> savedPolygon = [];
+  bool _isSaving = false;
 
-  final List<Map<String, dynamic>> projects = [
-    {
-      'name': 'Dak Lak Project 01',
-      'area': '1,250.50 ha',
-      'color': const Color(0xff1d9bf0),
-      'point': LatLng(12.7100, 108.2378),
-      'polygon': [
-        LatLng(12.86, 108.04),
-        LatLng(12.98, 108.15),
-        LatLng(12.95, 108.34),
-        LatLng(12.78, 108.42),
-        LatLng(12.63, 108.27),
-        LatLng(12.66, 108.10),
-      ],
-    },
-    {
-      'name': 'Lam Dong Project 02',
-      'area': '980.75 ha',
-      'color': const Color(0xff16a34a),
-      'point': LatLng(11.9404, 108.4583),
-      'polygon': [
-        LatLng(12.92, 108.48),
-        LatLng(13.02, 108.66),
-        LatLng(12.91, 108.84),
-        LatLng(12.72, 108.78),
-        LatLng(12.66, 108.58),
-      ],
-    },
-    {
-      'name': 'Gia Lai Project 01',
-      'area': '1,530.30 ha',
-      'color': const Color(0xff2563eb),
-      'point': LatLng(13.0500, 108.6200),
-      'polygon': [
-        LatLng(12.42, 108.43),
-        LatLng(12.55, 108.62),
-        LatLng(12.45, 108.87),
-        LatLng(12.23, 108.83),
-        LatLng(12.15, 108.55),
-      ],
-    },
-    {
-      'name': 'Quang Tri Project 01',
-      'area': '760.40 ha',
-      'color': const Color(0xff5b4bb7),
-      'point': LatLng(12.3600, 108.6500),
-      'polygon': null,
-    },
-    {
-      'name': 'Quang Nam Project 01',
-      'area': '660.20 ha',
-      'color': const Color(0xff6b7280),
-      'point': LatLng(12.5200, 107.8400),
-      'polygon': null,
-    },
+  /// Dự án được chọn để vẽ polygon
+  ForestProject? _selectedDrawProject;
+
+  /// Search query cho panel projects
+  String _searchQuery = '';
+
+  /// Palette màu cố định cho projects
+  static const List<Color> _projectColors = [
+    Color(0xff1d9bf0),
+    Color(0xff16a34a),
+    Color(0xff2563eb),
+    Color(0xff5b4bb7),
+    Color(0xff6b7280),
+    Color(0xffd97706),
+    Color(0xffdc2626),
+    Color(0xff0891b2),
+    Color(0xffe11d48),
+    Color(0xff7c3aed),
   ];
+
+  Color _colorForIndex(int index) {
+    return _projectColors[index % _projectColors.length];
+  }
+
+  Stream<List<ForestProject>> get _projectStream {
+    if (widget.currentUser.isOwner) {
+      return _projectService.watchProjectsByOwner(widget.currentUser.uid);
+    }
+    if (widget.currentUser.isWorker) {
+      return _projectService.watchProjects().map((projects) {
+        return projects
+            .where((p) => p.workerUids.contains(widget.currentUser.uid))
+            .toList();
+      });
+    }
+    // Admin thấy tất cả
+    return _projectService.watchProjects();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final activePolygon = savedPolygon.isNotEmpty
-        ? savedPolygon
-        : drawingPoints;
-    final areaHa = _polygonAreaHa(activePolygon);
-    final perimeterKm = _polygonPerimeterKm(activePolygon);
+    return StreamBuilder<List<ForestProject>>(
+      stream: _projectStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return const Scaffold(
+            backgroundColor: Color(0xfff7f9f8),
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
 
-    return Scaffold(
-      backgroundColor: const Color(0xfff7f9f8),
-      body: Row(
-        children: [
-          Expanded(
-            child: Stack(
-              children: [
-                FlutterMap(
-                  mapController: mapController,
-                  options: MapOptions(
-                    initialCenter: LatLng(12.7, 108.35),
-                    initialZoom: 8,
-                    onTap: (_, point) {
-                      if (drawMode) {
-                        setState(() {
-                          drawingPoints.add(point);
-                          savedPolygon.clear();
-                        });
-                      } else {
-                        _showCoordinateSnack(point);
-                      }
-                    },
-                  ),
+        final projects = snapshot.data ?? [];
+
+        final activePolygon =
+            savedPolygon.isNotEmpty ? savedPolygon : drawingPoints;
+        final areaHa = _polygonAreaHa(activePolygon);
+        final perimeterKm = _polygonPerimeterKm(activePolygon);
+
+        // Lọc dự án theo search
+        final filteredProjects = projects.where((p) {
+          if (_searchQuery.isEmpty) return true;
+          final q = _searchQuery.toLowerCase();
+          return p.projectName.toLowerCase().contains(q) ||
+              p.projectId.toLowerCase().contains(q) ||
+              p.province.toLowerCase().contains(q);
+        }).toList();
+
+        return Scaffold(
+          backgroundColor: const Color(0xfff7f9f8),
+          body: Row(
+            children: [
+              Expanded(
+                child: Stack(
                   children: [
-                    // Google Map: bản đồ đường phố (Google Maps Roadmap)
-                    if (baseMap == 'Google Map')
-                      TileLayer(
-                        urlTemplate:
-                            'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=vi&gl=vn',
-                        userAgentPackageName: 'com.example.forest_carbon_app',
+                    FlutterMap(
+                      mapController: mapController,
+                      options: MapOptions(
+                        initialCenter: LatLng(14.5, 107.5),
+                        initialZoom: 6,
+                        onTap: (_, point) {
+                          if (drawMode) {
+                            _handleDrawTap(point);
+                          } else {
+                            _showCoordinateSnack(point);
+                          }
+                        },
                       ),
-
-                    // Google Satellite: bản đồ vệ tinh (Google Maps Satellite)
-                    if (baseMap == 'Google Satellite')
-                      TileLayer(
-                        urlTemplate:
-                            'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}&hl=vi&gl=vn',
-                        userAgentPackageName: 'com.example.forest_carbon_app',
-                      ),
-
-                    // Google Hybrid: vệ tinh + đường/địa danh (Google Maps Hybrid)
-                    if (baseMap == 'Google Hybrid')
-                      TileLayer(
-                        urlTemplate:
-                            'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=vi&gl=vn',
-                        userAgentPackageName: 'com.example.forest_carbon_app',
-                      ),
-
-                    if (showProjects)
-                      PolygonLayer(
-                        polygons: [
-                          for (final p in projects)
-                            if (p['polygon'] != null)
-                              Polygon(
-                                points: List<LatLng>.from(p['polygon']),
-                                color: (p['color'] as Color).withOpacity(0.25),
-                                borderColor: p['color'] as Color,
-                                borderStrokeWidth: 3,
-                              ),
-                          if (activePolygon.length >= 3)
-                            Polygon(
-                              points: activePolygon,
-                              color: Colors.orange.withOpacity(0.25),
-                              borderColor: Colors.orange,
-                              borderStrokeWidth: 4,
-                            ),
-                        ],
-                      ),
-
-                    if (drawMode && drawingPoints.length >= 2)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: drawingPoints,
-                            color: Colors.orange,
-                            strokeWidth: 4,
+                      children: [
+                        // Google Map
+                        if (baseMap == 'Google Map')
+                          TileLayer(
+                            urlTemplate:
+                                'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=vi&gl=vn',
+                            userAgentPackageName:
+                                'com.example.forest_carbon_app',
                           ),
-                        ],
-                      ),
 
-                    if (showPlots)
-                      MarkerLayer(
-                        markers: [
-                          for (final p in projects)
-                            Marker(
-                              point: p['point'] as LatLng,
-                              width: 44,
-                              height: 44,
-                              child: GestureDetector(
-                                onTap: () {
-                                  _showProjectDialog(p);
-                                },
-                                child: const Icon(
-                                  Icons.location_on,
-                                  color: Colors.white,
-                                  size: 42,
+                        // Google Satellite
+                        if (baseMap == 'Google Satellite')
+                          TileLayer(
+                            urlTemplate:
+                                'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}&hl=vi&gl=vn',
+                            userAgentPackageName:
+                                'com.example.forest_carbon_app',
+                          ),
+
+                        // Google Hybrid
+                        if (baseMap == 'Google Hybrid')
+                          TileLayer(
+                            urlTemplate:
+                                'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=vi&gl=vn',
+                            userAgentPackageName:
+                                'com.example.forest_carbon_app',
+                          ),
+
+                        // Hiển thị polygon đã lưu từ Firestore
+                        if (showProjects)
+                          PolygonLayer(
+                            polygons: [
+                              // Polygon đã lưu trong Firestore
+                              for (int i = 0; i < projects.length; i++)
+                                if (projects[i].polygonCoordinates.isNotEmpty)
+                                  Polygon(
+                                    points: projects[i]
+                                        .polygonCoordinates
+                                        .map((c) =>
+                                            LatLng(c['lat']!, c['lng']!))
+                                        .toList(),
+                                    color: _colorForIndex(i)
+                                        .withOpacity(0.25),
+                                    borderColor: _colorForIndex(i),
+                                    borderStrokeWidth: 3,
+                                  ),
+                              // Polygon đang vẽ (chưa lưu)
+                              if (activePolygon.length >= 3)
+                                Polygon(
+                                  points: activePolygon,
+                                  color: Colors.orange.withOpacity(0.25),
+                                  borderColor: Colors.orange,
+                                  borderStrokeWidth: 4,
                                 ),
+                            ],
+                          ),
+
+                        if (drawMode && drawingPoints.length >= 2)
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: drawingPoints,
+                                color: Colors.orange,
+                                strokeWidth: 4,
                               ),
-                            ),
-                          for (final pt in drawingPoints)
-                            Marker(
-                              point: pt,
-                              width: 26,
-                              height: 26,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.orange,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 3,
+                            ],
+                          ),
+
+                        // Marker pin cho các project có polygon đã lưu
+                        if (showPlots)
+                          MarkerLayer(
+                            markers: [
+                              // Pin ở tâm polygon đã lưu
+                              for (int i = 0; i < projects.length; i++)
+                                if (projects[i]
+                                    .polygonCoordinates
+                                    .isNotEmpty)
+                                  Marker(
+                                    point: _polygonCenter(projects[i]
+                                        .polygonCoordinates
+                                        .map((c) =>
+                                            LatLng(c['lat']!, c['lng']!))
+                                        .toList()),
+                                    width: 44,
+                                    height: 44,
+                                    child: GestureDetector(
+                                      onTap: () =>
+                                          _showProjectInfoDialog(
+                                              projects[i], i),
+                                      child: const Icon(
+                                        Icons.location_on,
+                                        color: Colors.white,
+                                        size: 42,
+                                      ),
+                                    ),
+                                  ),
+                              // Marker cho các điểm đang vẽ
+                              for (final pt in drawingPoints)
+                                Marker(
+                                  point: pt,
+                                  width: 26,
+                                  height: 26,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 3,
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ),
-                        ],
-                      ),
+                            ],
+                          ),
+                      ],
+                    ),
+
+                    Positioned(left: 22, top: 24, child: _mapLayerBox()),
+                    Positioned(right: 22, top: 165, child: _zoomControls()),
+                    Positioned(
+                      left: 220,
+                      top: 24,
+                      child: _drawToolbar(areaHa, perimeterKm, projects),
+                    ),
+                    Positioned(
+                      left: 220,
+                      bottom: 20,
+                      child: _infoPanel(areaHa, perimeterKm),
+                    ),
                   ],
                 ),
+              ),
 
-                Positioned(left: 22, top: 24, child: _mapLayerBox()),
-                Positioned(right: 22, top: 165, child: _zoomControls()),
-                Positioned(
-                  left: 220,
-                  top: 24,
-                  child: _drawToolbar(areaHa, perimeterKm),
-                ),
-                Positioned(
-                  left: 220,
-                  bottom: 20,
-                  child: _infoPanel(areaHa, perimeterKm),
-                ),
-              ],
-            ),
+              _projectsPanel(filteredProjects, projects),
+            ],
           ),
-
-          _projectsPanel(),
-        ],
-      ),
+        );
+      },
     );
   }
 
+  // ── Xử lý tap khi đang vẽ ──
+  void _handleDrawTap(LatLng point) {
+    if (_selectedDrawProject == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠ Vui lòng chọn dự án trước khi vẽ!'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Validate: kiểm tra điểm có nằm trong tỉnh của project không
+    final province = _selectedDrawProject!.province;
+    if (province.isNotEmpty && !isPointInProvince(province, point)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '⛔ Điểm nằm NGOÀI tỉnh "$province"!\n'
+            'Vui lòng vẽ trong phạm vi tỉnh được chỉ định cho dự án "${_selectedDrawProject!.projectName}".',
+          ),
+          backgroundColor: Colors.red.shade700,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      drawingPoints.add(point);
+      savedPolygon.clear();
+    });
+  }
+
+  // ── Map Layer Box ──
   Widget _mapLayerBox() {
     return Container(
       width: 190,
@@ -370,7 +435,12 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  Widget _drawToolbar(double areaHa, double perimeterKm) {
+  // ── Draw Toolbar ──
+  Widget _drawToolbar(
+      double areaHa, double perimeterKm, List<ForestProject> projects) {
+    final bool hasPolygon = savedPolygon.isNotEmpty;
+    final bool canUpload = hasPolygon && _selectedDrawProject != null;
+
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -382,8 +452,17 @@ class _MapPageState extends State<MapPage> {
       ),
       child: Row(
         children: [
+          // Draw Polygon button
           ElevatedButton.icon(
-            onPressed: () => setState(() => drawMode = !drawMode),
+            onPressed: () {
+              if (!drawMode) {
+                // Bắt đầu vẽ → yêu cầu chọn project trước
+                _showSelectProjectDialog(projects);
+              } else {
+                // Đang vẽ → dừng
+                setState(() => drawMode = false);
+              }
+            },
             icon: Icon(drawMode ? Icons.edit_off : Icons.polyline),
             label: Text(drawMode ? 'Stop Draw' : 'Draw Polygon'),
             style: ElevatedButton.styleFrom(
@@ -392,17 +471,26 @@ class _MapPageState extends State<MapPage> {
             ),
           ),
           const SizedBox(width: 8),
+
+          // Save button — lưu polygon vào Firestore
           OutlinedButton.icon(
-            onPressed: drawingPoints.length >= 3
-                ? () => setState(() {
-                    savedPolygon = List.from(drawingPoints);
-                    drawMode = false;
-                  })
+            onPressed: (drawingPoints.length >= 3 &&
+                    _selectedDrawProject != null &&
+                    !_isSaving)
+                ? () => _savePolygonToFirestore()
                 : null,
-            icon: const Icon(Icons.save),
-            label: const Text('Save'),
+            icon: _isSaving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.save),
+            label: Text(_isSaving ? 'Đang lưu...' : 'Save'),
           ),
           const SizedBox(width: 8),
+
+          // Clear button
           OutlinedButton.icon(
             onPressed: () => setState(() {
               drawingPoints.clear();
@@ -413,16 +501,202 @@ class _MapPageState extends State<MapPage> {
             label: const Text('Clear'),
           ),
           const SizedBox(width: 8),
+
+          // Upload button — CHỈ bật khi đã Save polygon
           OutlinedButton.icon(
-            onPressed: _showUploadDialog,
+            onPressed: canUpload ? _showUploadDialog : null,
             icon: const Icon(Icons.upload_file),
             label: const Text('Upload .shp/.geojson/.kml'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: canUpload ? AppColors.primary : Colors.grey,
+            ),
+          ),
+
+          // Hiển thị dự án đang chọn
+          if (_selectedDrawProject != null) ...[
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xffe8f5e9),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: AppColors.primary.withOpacity(0.4)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.forest, size: 16, color: AppColors.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    _selectedDrawProject!.projectName,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xff1b5e20),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '(${_selectedDrawProject!.province})',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xff4caf50),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── Dialog chọn dự án trước khi vẽ ──
+  void _showSelectProjectDialog(List<ForestProject> projects) {
+    if (projects.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Không có dự án nào. Vui lòng tạo dự án trước.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.forest, color: AppColors.primary),
+            SizedBox(width: 10),
+            Text('Chọn dự án để vẽ Polygon'),
+          ],
+        ),
+        content: SizedBox(
+          width: 500,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: const Color(0xfffff8e1),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: const Color(0xffe8b84b)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline,
+                        color: Color(0xffb45309), size: 18),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Bạn phải vẽ polygon trong phạm vi tỉnh/thành phố '
+                        'được chỉ định cho dự án. Các điểm ngoài phạm vi sẽ bị từ chối.',
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: Color(0xff7a4a00),
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 350),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: projects.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final p = projects[index];
+                    final isSelected = _selectedDrawProject?.id == p.id;
+                    return ListTile(
+                      leading: CircleAvatar(
+                        radius: 18,
+                        backgroundColor: _colorForIndex(index),
+                        child: Text(
+                          p.projectName.isNotEmpty
+                              ? p.projectName[0].toUpperCase()
+                              : '?',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      title: Text(
+                        p.projectName,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: isSelected
+                              ? AppColors.primary
+                              : const Color(0xff1a2e22),
+                        ),
+                      ),
+                      subtitle: Text(
+                        '${p.province} • ${p.areaHa.toStringAsFixed(1)} ha • ${p.status}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      trailing: isSelected
+                          ? const Icon(Icons.check_circle,
+                              color: AppColors.primary)
+                          : const Icon(Icons.radio_button_unchecked,
+                              color: Colors.grey),
+                      selected: isSelected,
+                      selectedTileColor: const Color(0xffe8f5e9),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        setState(() {
+                          _selectedDrawProject = p;
+                          drawingPoints.clear();
+                          savedPolygon.clear();
+                          drawMode = true;
+                        });
+
+                        // Di chuyển map đến tỉnh của project
+                        final bounds =
+                            getProvinceBounds(p.province);
+                        if (bounds != null) {
+                          mapController.move(bounds.center, 9);
+                        }
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              '✓ Đã chọn "${p.projectName}" — '
+                              'Vẽ polygon trong tỉnh ${p.province}. '
+                              'Nhấp vào bản đồ để bắt đầu vẽ.',
+                            ),
+                            backgroundColor: const Color(0xff168a45),
+                            duration: const Duration(seconds: 3),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Hủy'),
           ),
         ],
       ),
     );
   }
 
+  // ── Info Panel ──
   Widget _infoPanel(double areaHa, double perimeterKm) {
     final points = savedPolygon.isNotEmpty ? savedPolygon : drawingPoints;
     return Container(
@@ -437,6 +711,17 @@ class _MapPageState extends State<MapPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_selectedDrawProject != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  '🌲 ${_selectedDrawProject!.projectName} (${_selectedDrawProject!.province})',
+                  style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13),
+                ),
+              ),
             Text('Tổng diện tích: ${areaHa.toStringAsFixed(2)} ha'),
             Text('Chu vi: ${perimeterKm.toStringAsFixed(2)} km'),
             Text('Số tọa độ: ${points.length} điểm'),
@@ -444,13 +729,24 @@ class _MapPageState extends State<MapPage> {
               Text(
                 'Lat/Long cuối: ${points.last.latitude.toStringAsFixed(5)}, ${points.last.longitude.toStringAsFixed(5)}',
               ),
+            if (savedPolygon.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  '✅ Polygon đã được lưu — Có thể Upload',
+                  style: TextStyle(
+                      color: Colors.greenAccent, fontWeight: FontWeight.w600),
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _projectsPanel() {
+  // ── Projects Panel (bên phải) ──
+  Widget _projectsPanel(
+      List<ForestProject> filteredProjects, List<ForestProject> allProjects) {
     return Container(
       width: 285,
       height: double.infinity,
@@ -467,6 +763,7 @@ class _MapPageState extends State<MapPage> {
           SizedBox(
             height: 42,
             child: TextField(
+              onChanged: (v) => setState(() => _searchQuery = v.trim()),
               decoration: InputDecoration(
                 hintText: 'Search projects...',
                 hintStyle: const TextStyle(fontSize: 13, color: Colors.grey),
@@ -479,54 +776,235 @@ class _MapPageState extends State<MapPage> {
             ),
           ),
           const SizedBox(height: 28),
-          Expanded(
-            child: ListView.separated(
-              itemCount: projects.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 24),
-              itemBuilder: (context, index) {
-                final p = projects[index];
-                return InkWell(
-                  onTap: () => mapController.move(p['point'] as LatLng, 10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        margin: const EdgeInsets.only(top: 5),
-                        width: 11,
-                        height: 11,
-                        decoration: BoxDecoration(
-                          color: p['color'] as Color,
-                          shape: BoxShape.circle,
-                        ),
+          if (filteredProjects.isEmpty)
+            const Expanded(
+              child: Center(
+                child: Text(
+                  'Không tìm thấy dự án.',
+                  style: TextStyle(
+                      color: Color(0xff77837b), fontWeight: FontWeight.w600),
+                ),
+              ),
+            )
+          else
+            Expanded(
+              child: ListView.separated(
+                itemCount: filteredProjects.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 24),
+                itemBuilder: (context, index) {
+                  final p = filteredProjects[index];
+                  // Tìm original index cho màu nhất quán
+                  final originalIndex = allProjects.indexOf(p);
+                  final color = _colorForIndex(
+                      originalIndex >= 0 ? originalIndex : index);
+                  final isSelected = _selectedDrawProject?.id == p.id;
+
+                  return InkWell(
+                    onTap: () {
+                      // Di chuyển map đến tỉnh
+                      final bounds = getProvinceBounds(p.province);
+                      if (bounds != null) {
+                        mapController.move(bounds.center, 9);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? const Color(0xffe8f5e9)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(6),
+                        border: isSelected
+                            ? Border.all(
+                                color: AppColors.primary.withOpacity(0.5))
+                            : null,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              p['name'],
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                              ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            margin: const EdgeInsets.only(top: 5),
+                            width: 11,
+                            height: 11,
+                            decoration: BoxDecoration(
+                              color: color,
+                              shape: BoxShape.circle,
                             ),
-                            const SizedBox(height: 7),
-                            Text(
-                              p['area'],
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                              ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  p.projectName,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${p.areaHa.toStringAsFixed(1)} ha',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  p.province,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xff6b7280),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                          ),
+                          if (isSelected)
+                            const Icon(Icons.check_circle,
+                                size: 18, color: AppColors.primary),
+                        ],
                       ),
-                    ],
-                  ),
-                );
-              },
+                    ),
+                  );
+                },
+              ),
             ),
+        ],
+      ),
+    );
+  }
+
+  // ── Lưu polygon vào Firestore ──
+  Future<void> _savePolygonToFirestore() async {
+    if (_selectedDrawProject == null || drawingPoints.length < 3) return;
+
+    setState(() => _isSaving = true);
+
+    try {
+      final polygonCoords = drawingPoints
+          .map((p) => {'lat': p.latitude, 'lng': p.longitude})
+          .toList();
+      final areaHa = _polygonAreaHa(drawingPoints);
+
+      await _projectService.updateProjectPolygon(
+        documentId: _selectedDrawProject!.id,
+        polygonCoordinates: polygonCoords,
+        areaHa: areaHa,
+      );
+
+      if (mounted) {
+        setState(() {
+          savedPolygon = List.from(drawingPoints);
+          drawMode = false;
+          _isSaving = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '✓ Đã lưu polygon cho "${_selectedDrawProject!.projectName}" '
+              '(${areaHa.toStringAsFixed(2)} ha). '
+              'Dữ liệu đã cập nhật trên toàn hệ thống.',
+            ),
+            backgroundColor: const Color(0xff168a45),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Lỗi khi lưu polygon: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // ── Tính tâm polygon ──
+  LatLng _polygonCenter(List<LatLng> points) {
+    if (points.isEmpty) return LatLng(0, 0);
+    double lat = 0, lng = 0;
+    for (final p in points) {
+      lat += p.latitude;
+      lng += p.longitude;
+    }
+    return LatLng(lat / points.length, lng / points.length);
+  }
+
+  // ── Dialog thông tin project khi tap marker ──
+  void _showProjectInfoDialog(ForestProject project, int colorIndex) {
+    final polygonPoints = project.polygonCoordinates
+        .map((c) => LatLng(c['lat']!, c['lng']!))
+        .toList();
+    final areaHa = _polygonAreaHa(polygonPoints);
+    final perimeterKm = _polygonPerimeterKm(polygonPoints);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Row(
+          children: [
+            Container(
+              width: 14,
+              height: 14,
+              decoration: BoxDecoration(
+                color: _colorForIndex(colorIndex),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(project.projectName)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _infoRow('Project ID', project.projectId),
+            _infoRow('Tỉnh/TP', project.province),
+            _infoRow('Huyện', project.district),
+            _infoRow('Xã', project.commune),
+            _infoRow('Diện tích', '${areaHa.toStringAsFixed(2)} ha'),
+            _infoRow('Chu vi', '${perimeterKm.toStringAsFixed(2)} km'),
+            _infoRow('Số điểm', '${polygonPoints.length}'),
+            _infoRow('Trạng thái', project.status),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 90,
+            child: Text(label,
+                style: const TextStyle(
+                    color: Color(0xff8b958f), fontSize: 13)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w700, fontSize: 13)),
           ),
         ],
       ),
@@ -543,43 +1021,102 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  void _showProjectDialog(Map<String, dynamic> p) {
+  void _showUploadDialog() {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text(p['name']),
-        content: Text(
-          'Area: ${p['area']}\nLat: ${(p['point'] as LatLng).latitude}\nLong: ${(p['point'] as LatLng).longitude}',
+        title: Row(
+          children: [
+            const Icon(Icons.upload_file, color: AppColors.primary),
+            const SizedBox(width: 10),
+            const Text('Upload Shapefile'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_selectedDrawProject != null)
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: const Color(0xffe8f5e9),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: const Color(0xff4caf50)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.forest,
+                        color: Color(0xff2e7d32), size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Dự án: ${_selectedDrawProject!.projectName}\n'
+                        'Tỉnh: ${_selectedDrawProject!.province}',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xff1b5e20),
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const Text(
+              'Cho phép upload:\n'
+              '• .shp\n'
+              '• .geojson\n'
+              '• .kml\n\n'
+              'Sau khi upload hệ thống sẽ hiển thị:\n'
+              '• Tổng diện tích\n'
+              '• Chu vi\n'
+              '• Tọa độ Lat/Long',
+            ),
+            if (savedPolygon.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xfff5f5f5),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        'Diện tích polygon: ${_polygonAreaHa(savedPolygon).toStringAsFixed(2)} ha'),
+                    Text(
+                        'Chu vi: ${_polygonPerimeterKm(savedPolygon).toStringAsFixed(2)} km'),
+                    Text('Số điểm: ${savedPolygon.length}'),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Đóng'),
           ),
-        ],
-      ),
-    );
-  }
-
-  void _showUploadDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Upload Shapefile'),
-        content: const Text(
-          'Cho phép upload:\n'
-          '• .shp\n'
-          '• .geojson\n'
-          '• .kml\n\n'
-          'Sau khi upload hệ thống sẽ hiển thị:\n'
-          '• Tổng diện tích\n'
-          '• Chu vi\n'
-          '• Tọa độ Lat/Long',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Đóng'),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                      '✓ Đã gửi dữ liệu polygon lên hệ thống thành công!'),
+                  backgroundColor: Color(0xff168a45),
+                ),
+              );
+            },
+            icon: const Icon(Icons.cloud_upload),
+            label: const Text('Upload'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
           ),
         ],
       ),

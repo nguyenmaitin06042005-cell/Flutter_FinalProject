@@ -99,4 +99,25 @@ class ForestProjectService {
 
     await _projects.doc(documentId).delete();
   }
+
+  /// Lưu polygon đã vẽ + cập nhật diện tích cho project.
+  /// Dữ liệu polygon và diện tích sẽ tự động đồng bộ sang mọi trang khác
+  /// thông qua StreamBuilder (watchProjects).
+  Future<void> updateProjectPolygon({
+    required String documentId,
+    required List<Map<String, double>> polygonCoordinates,
+    required double areaHa,
+  }) async {
+    if (documentId.isEmpty) {
+      throw Exception('Không tìm thấy mã tài liệu Firebase để cập nhật polygon.');
+    }
+
+    await _projects.doc(documentId).update(<String, dynamic>{
+      'polygonCoordinates': polygonCoordinates
+          .map((c) => <String, dynamic>{'lat': c['lat'], 'lng': c['lng']})
+          .toList(),
+      'areaHa': areaHa,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
 }

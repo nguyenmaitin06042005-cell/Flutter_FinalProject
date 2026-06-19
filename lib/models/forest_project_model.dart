@@ -17,6 +17,7 @@ class ForestProject {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final List<String> workerUids;
+  final List<Map<String, double>> polygonCoordinates;
 
   const ForestProject({
     required this.id,
@@ -35,6 +36,7 @@ class ForestProject {
     this.createdAt,
     this.updatedAt,
     this.workerUids = const [],
+    this.polygonCoordinates = const [],
   });
 
   factory ForestProject.fromFirestore(
@@ -59,6 +61,7 @@ class ForestProject {
       createdAt: _toDateTime(data['createdAt']),
       updatedAt: _toDateTime(data['updatedAt']),
       workerUids: List<String>.from(data['workerUids'] ?? []),
+      polygonCoordinates: _toPolygonCoords(data['polygonCoordinates']),
     );
   }
 
@@ -77,6 +80,9 @@ class ForestProject {
       'areaHa': areaHa,
       'status': status,
       'workerUids': workerUids,
+      'polygonCoordinates': polygonCoordinates
+          .map((c) => <String, dynamic>{'lat': c['lat'], 'lng': c['lng']})
+          .toList(),
     };
   }
 
@@ -97,6 +103,7 @@ class ForestProject {
     DateTime? createdAt,
     DateTime? updatedAt,
     List<String>? workerUids,
+    List<Map<String, double>>? polygonCoordinates,
   }) {
     return ForestProject(
       id: id ?? this.id,
@@ -115,6 +122,7 @@ class ForestProject {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       workerUids: workerUids ?? this.workerUids,
+      polygonCoordinates: polygonCoordinates ?? this.polygonCoordinates,
     );
   }
 
@@ -138,5 +146,19 @@ class ForestProject {
     if (value is DateTime) return value;
     if (value is String) return DateTime.tryParse(value);
     return null;
+  }
+
+  static List<Map<String, double>> _toPolygonCoords(dynamic value) {
+    if (value == null) return [];
+    if (value is! List) return [];
+    return value.map<Map<String, double>>((item) {
+      if (item is Map) {
+        return {
+          'lat': _toDouble(item['lat']),
+          'lng': _toDouble(item['lng']),
+        };
+      }
+      return {'lat': 0.0, 'lng': 0.0};
+    }).toList();
   }
 }
