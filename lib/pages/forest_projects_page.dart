@@ -327,11 +327,9 @@ class _ForestProjectsPageState extends State<ForestProjectsPage> {
     final endIndex = (startIndex + _itemsPerPage).clamp(0, filtered.length);
     final currentRows = filtered.sublist(startIndex, endIndex);
 
-    return Scrollbar(
-      thumbVisibility: true,
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
           child: DataTable(
             horizontalMargin: 8,
             columnSpacing: 28,
@@ -435,7 +433,6 @@ class _ForestProjectsPageState extends State<ForestProjectsPage> {
             }).toList(),
           ),
         ),
-      ),
     );
   }
 

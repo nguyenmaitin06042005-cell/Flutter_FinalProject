@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/managed_file_model.dart';
 import '../services/file_management_service.dart';
+import '../services/notification_service.dart';
 import '../widgets/app_colors.dart';
 
 class FilesPage extends StatefulWidget {
@@ -25,6 +26,7 @@ class _FilesPageState extends State<FilesPage> {
   ];
 
   final FileManagementService _service = FileManagementService();
+  final NotificationService _notificationService = NotificationService();
   final TextEditingController _searchController = TextEditingController();
 
   String _selectedCategory = 'Tất cả danh mục';
@@ -933,7 +935,7 @@ class _FilesPageState extends State<FilesPage> {
                               dialogSetState(() => isUploading = true);
 
                               try {
-                                await _service.uploadFile(
+                                final uploadedFile = await _service.uploadFile(
                                   bytes: selectedBytes!,
                                   fileName: selectedFileName,
                                   extension: selectedExtension,
@@ -941,6 +943,23 @@ class _FilesPageState extends State<FilesPage> {
                                   project: selectedProject,
                                   uploadedBy: uploadedBy,
                                 );
+
+                                String? notificationWarning;
+
+                                try {
+                                  await _notificationService
+                                      .createNewFileNotification(
+                                    uploaderName: uploadedBy,
+                                    fileName: selectedFileName,
+                                    projectName: selectedProject,
+                                    referenceId: uploadedFile.id,
+                                  );
+                                } catch (notificationError) {
+                                  notificationWarning =
+                                      'Tệp đã upload nhưng chưa tạo được '
+                                      'thông báo: $notificationError';
+                                  debugPrint(notificationWarning);
+                                }
 
                                 if (!mounted) return;
 
@@ -951,11 +970,18 @@ class _FilesPageState extends State<FilesPage> {
                                 ScaffoldMessenger.of(
                                   this.context,
                                 ).showSnackBar(
-                                  const SnackBar(
+                                  SnackBar(
                                     content: Text(
-                                      'Đã upload tệp lên Firebase.',
+                                      notificationWarning ??
+                                          'Đã upload hồ sơ và tạo thông báo.',
                                     ),
-                                    backgroundColor: Colors.green,
+                                    backgroundColor: notificationWarning == null
+                                        ? Colors.green
+                                        : Colors.orange,
+                                    duration: Duration(
+                                      seconds:
+                                          notificationWarning == null ? 3 : 8,
+                                    ),
                                   ),
                                 );
                               } catch (error) {

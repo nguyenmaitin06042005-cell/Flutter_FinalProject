@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../models/app_notification_model.dart';
@@ -167,7 +168,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 620;
+        final compact = constraints.maxWidth < 760;
 
         final title = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -193,32 +194,57 @@ class _NotificationsPageState extends State<NotificationsPage> {
           ],
         );
 
-        final markAllButton = OutlinedButton.icon(
-          onPressed: unreadCount == 0
-              ? null
-              : () async {
-                  await _service.markAllAsRead(
-                    notifications,
-                  );
-                },
-          icon: const Icon(
-            Icons.done_all,
-            size: 18,
-          ),
-          label: const Text(
-            'Đã đọc tất cả',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
+        final actions = Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: <Widget>[
+            if (widget.currentUser.isAdmin)
+              ElevatedButton.icon(
+                onPressed: _showUpdateRequestDialog,
+                icon: const Icon(
+                  Icons.edit_note_outlined,
+                  size: 18,
+                ),
+                label: const Text(
+                  'Yêu cầu cập nhật',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                ),
+              ),
+            OutlinedButton.icon(
+              onPressed: unreadCount == 0
+                  ? null
+                  : () async {
+                      await _service.markAllAsRead(
+                        notifications,
+                      );
+                    },
+              icon: const Icon(
+                Icons.done_all,
+                size: 18,
+              ),
+              label: const Text(
+                'Đã đọc tất cả',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                side: BorderSide(
+                  color: unreadCount == 0
+                      ? const Color(0xffd7ded9)
+                      : AppColors.primary,
+                ),
+              ),
             ),
-          ),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: AppColors.primary,
-            side: BorderSide(
-              color: unreadCount == 0
-                  ? const Color(0xffd7ded9)
-                  : AppColors.primary,
-            ),
-          ),
+          ],
         );
 
         if (compact) {
@@ -227,19 +253,271 @@ class _NotificationsPageState extends State<NotificationsPage> {
             children: <Widget>[
               title,
               const SizedBox(height: 12),
-              markAllButton,
+              actions,
             ],
           );
         }
 
         return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Expanded(child: title),
-            markAllButton,
+            actions,
           ],
         );
       },
     );
+  }
+
+  Future<void> _showUpdateRequestDialog() async {
+    final contentController = TextEditingController();
+
+    List<String> projectNames = <String>[];
+    String selectedProject = 'Không chọn Project';
+    bool isSending = false;
+
+    try {
+      final snapshot =
+          await FirebaseFirestore.instance.collection('forest_projects').get();
+
+      projectNames = snapshot.docs
+          .map((document) {
+            final data = document.data();
+
+            return (data['projectName'] ??
+                    data['project'] ??
+                    data['name'] ??
+                    '')
+                .toString()
+                .trim();
+          })
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+    } catch (error) {
+      debugPrint(
+        'Không thể tải danh sách Project: $error',
+      );
+    }
+
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, dialogSetState) {
+              return AlertDialog(
+                insetPadding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 18,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                title: Row(
+                  children: <Widget>[
+                    const Expanded(
+                      child: Text(
+                        'Gửi yêu cầu cập nhật dữ liệu',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed:
+                          isSending ? null : () => Navigator.pop(dialogContext),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+                content: SizedBox(
+                  width: 560,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        DropdownButtonFormField<String>(
+                          value: selectedProject,
+                          isExpanded: true,
+                          menuMaxHeight: 300,
+                          decoration: const InputDecoration(
+                            labelText: 'Project',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: <String>[
+                            'Không chọn Project',
+                            ...projectNames,
+                          ]
+                              .map(
+                                (project) => DropdownMenuItem<String>(
+                                  value: project,
+                                  child: Text(
+                                    project,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: isSending
+                              ? null
+                              : (value) {
+                                  if (value == null) return;
+
+                                  dialogSetState(
+                                    () => selectedProject = value,
+                                  );
+                                },
+                        ),
+                        const SizedBox(height: 14),
+                        TextField(
+                          controller: contentController,
+                          enabled: !isSending,
+                          minLines: 4,
+                          maxLines: 7,
+                          decoration: const InputDecoration(
+                            labelText: 'Nội dung cần cập nhật',
+                            hintText:
+                                'Ví dụ: Bổ sung DBH, chiều cao và số lượng cây cho Plot 01.',
+                            alignLabelWithHint: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Yêu cầu sẽ được gửi dưới dạng thông báo In-app.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xff748078),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                actions: <Widget>[
+                  TextButton(
+                    onPressed:
+                        isSending ? null : () => Navigator.pop(dialogContext),
+                    child: const Text('Hủy'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: isSending
+                        ? null
+                        : () async {
+                            final content = contentController.text.trim();
+
+                            if (content.isEmpty) {
+                              ScaffoldMessenger.of(
+                                this.context,
+                              ).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Vui lòng nhập nội dung cần cập nhật.',
+                                  ),
+                                  backgroundColor: Colors.orange,
+                                ),
+                              );
+                              return;
+                            }
+
+                            dialogSetState(
+                              () => isSending = true,
+                            );
+
+                            final firebaseUser =
+                                FirebaseAuth.instance.currentUser;
+
+                            final requesterName =
+                                firebaseUser?.displayName?.trim().isNotEmpty ==
+                                        true
+                                    ? firebaseUser!.displayName!.trim()
+                                    : (firebaseUser?.email?.trim().isNotEmpty ==
+                                            true
+                                        ? firebaseUser!.email!.trim()
+                                        : 'Admin Platform');
+
+                            try {
+                              await _service.createNotification(
+                                title: 'Yêu cầu cập nhật dữ liệu',
+                                message:
+                                    '$requesterName yêu cầu cập nhật: $content',
+                                type: AppNotificationType.updateRequest,
+                                projectName:
+                                    selectedProject == 'Không chọn Project'
+                                        ? ''
+                                        : selectedProject,
+                              );
+
+                              if (!mounted) return;
+
+                              if (dialogContext.mounted) {
+                                Navigator.pop(dialogContext);
+                              }
+
+                              ScaffoldMessenger.of(
+                                this.context,
+                              ).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Đã gửi yêu cầu cập nhật dữ liệu.',
+                                  ),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            } catch (error) {
+                              if (!mounted) return;
+
+                              dialogSetState(
+                                () => isSending = false,
+                              );
+
+                              ScaffoldMessenger.of(
+                                this.context,
+                              ).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Không thể gửi yêu cầu: $error',
+                                  ),
+                                  backgroundColor: Colors.red,
+                                  duration: const Duration(seconds: 8),
+                                ),
+                              );
+                            }
+                          },
+                    icon: isSending
+                        ? const SizedBox(
+                            width: 17,
+                            height: 17,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.send_outlined,
+                            size: 18,
+                          ),
+                    label: Text(
+                      isSending ? 'Đang gửi...' : 'Gửi yêu cầu',
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      contentController.dispose();
+    }
   }
 
   Widget _buildToolbar() {
@@ -476,7 +754,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                   ),
                 const PopupMenuItem(
                   value: 'delete',
-                  child: Text('Xóa thông báo', style: TextStyle(color: Colors.red)),
+                  child: Text('Xóa thông báo',
+                      style: TextStyle(color: Colors.red)),
                 ),
               ],
               child: const Padding(
@@ -511,9 +790,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
         return Container(
           padding: const EdgeInsets.all(15),
           decoration: BoxDecoration(
-            color: isRead
-                ? const Color(0xfffdf8ed)
-                : const Color(0xfffff8e1),
+            color: isRead ? const Color(0xfffdf8ed) : const Color(0xfffff8e1),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: isApproved
@@ -538,7 +815,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                       color: visual.background,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(visual.icon, color: visual.foreground, size: 22),
+                    child:
+                        Icon(visual.icon, color: visual.foreground, size: 22),
                   ),
                   const SizedBox(width: 13),
                   Expanded(
@@ -649,10 +927,15 @@ class _NotificationsPageState extends State<NotificationsPage> {
                     },
                     itemBuilder: (_) => <PopupMenuEntry<String>>[
                       if (!isRead)
-                        const PopupMenuItem(value: 'read', child: Text('Đánh dấu đã đọc')),
+                        const PopupMenuItem(
+                            value: 'read', child: Text('Đánh dấu đã đọc')),
                       if (isRead)
-                        const PopupMenuItem(value: 'unread', child: Text('Đánh dấu chưa đọc')),
-                      const PopupMenuItem(value: 'delete', child: Text('Xóa thông báo', style: TextStyle(color: Colors.red))),
+                        const PopupMenuItem(
+                            value: 'unread', child: Text('Đánh dấu chưa đọc')),
+                      const PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Xóa thông báo',
+                              style: TextStyle(color: Colors.red))),
                     ],
                     child: const Padding(
                       padding: EdgeInsets.all(8),
@@ -711,8 +994,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                               ),
                             )
                           : const Icon(Icons.check, size: 16),
-                      label:
-                          Text(isProcessing ? 'Đang xử lý...' : 'Chấp nhận'),
+                      label: Text(isProcessing ? 'Đang xử lý...' : 'Chấp nhận'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primary,
                         foregroundColor: Colors.white,

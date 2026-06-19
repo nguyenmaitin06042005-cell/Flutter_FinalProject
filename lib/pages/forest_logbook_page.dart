@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 
 import '../models/activity_model.dart';
 import '../services/logbook_service.dart';
+import '../services/notification_service.dart';
+import '../services/user_service.dart';
 import '../widgets/app_colors.dart';
 import 'dart:async';
 
@@ -25,9 +27,45 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
   ActivityRecord? _selectedActivity;
 
   final LogbookService _logbookService = LogbookService();
+  final NotificationService _notificationService = NotificationService();
+  final UserService _userService = UserService();
+  final Map<String, String> _userNames = {};
+  
   StreamSubscription? _subscription;
   List<ActivityRecord> _activities = [];
   bool _isLoading = true;
+
+  Future<void> _loadUserNames(List<ActivityRecord> activities) async {
+    bool updated = false;
+    for (final act in activities) {
+      final uid = act.user;
+      if (uid.isNotEmpty && !_userNames.containsKey(uid) && act.userName.isEmpty) {
+        final u = await _userService.getUser(uid);
+        if (u != null) {
+          _userNames[uid] = u.fullName;
+          updated = true;
+        } else {
+          _userNames[uid] = uid; // fallback
+        }
+      }
+    }
+    if (updated && mounted) setState(() {});
+  }
+
+  String _normalizeActivityType(String raw) {
+    switch (raw) {
+      case 'Trồng cây': return 'Planting';
+      case 'Chăm sóc cây': return 'Maintenance';
+      case 'Bón phân': return 'Fertilizing';
+      case 'Kiểm tra sinh trưởng': return 'Growth Check';
+      case 'Tuần tra': return 'Patrol';
+      case 'Phòng cháy chữa cháy': return 'Fire Prevention';
+      default:
+        const valid = ['Planting', 'Maintenance', 'Fertilizing', 'Growth Check', 'Patrol', 'Fire Prevention'];
+        if (valid.contains(raw)) return raw;
+        return 'Planting';
+    }
+  }
 
   @override
   void initState() {
@@ -39,6 +77,7 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
 
         setState(() {
           _activities = data;
+          _loadUserNames(data);
 
           if (_activities.isEmpty) {
             _selectedActivity = null;
@@ -495,7 +534,9 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
                     SizedBox(
                       width: 105,
                       child: Text(
-                        activity.userName.isNotEmpty ? activity.userName : activity.user,
+                        activity.userName.isNotEmpty 
+                            ? activity.userName 
+                            : (_userNames[activity.user] ?? activity.user),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -560,11 +601,12 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
             }).toList(),
           ),
         ),
-      );
+    );
   }
 
   Widget _activityBadge(String type) {
-    final style = _activityStyle(type);
+    final normalized = _normalizeActivityType(type);
+    final style = _activityStyle(normalized);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
@@ -573,7 +615,7 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
         borderRadius: BorderRadius.circular(14),
       ),
       child: Text(
-        type,
+        normalized,
         style: TextStyle(
           color: style.foreground,
           fontSize: 11.5,
@@ -691,13 +733,18 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
                           children: [
                             _detailRow(
                               'Activity Type',
-                              selected.activityType,
+                              _normalizeActivityType(selected.activityType),
                             ),
                             _detailRow(
                               'Date',
                               _formatDateTime(selected.date),
                             ),
-                            _detailRow('User', selected.userName.isNotEmpty ? selected.userName : selected.user),
+                            _detailRow(
+                              'User',
+                              selected.userName.isNotEmpty 
+                                  ? selected.userName 
+                                  : (_userNames[selected.user] ?? selected.user),
+                            ),
                             _detailRow('Project', selected.project),
                             _detailRow('Location', selected.location),
                             _detailRow(
@@ -908,7 +955,7 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
   Future<void> _showActivityDialog({ActivityRecord? activity}) async {
     final isEditing = activity != null;
 
-    String activityType = activity?.activityType ?? 'Planting';
+    String activityType = _normalizeActivityType(activity?.activityType ?? 'Planting');
     String project = activity?.project ?? 'Dak Lak Project 01';
 
     final userController = TextEditingController(text: activity?.user ?? '');
@@ -1287,15 +1334,29 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
                       );
 
                       late ActivityRecord savedActivity;
+                      String? notificationWarning;
 
                       if (activity == null) {
-                        savedActivity = await _logbookService.addActivity(
-                          result,
-                        );
+                        savedActivity =
+                            await _logbookService.addActivity(result);
+
+                        try {
+                          await _notificationService
+                              .createNewLogbookNotification(
+                            userName: savedActivity.user,
+                            activityType: savedActivity.activityType,
+                            projectName: savedActivity.project,
+                            referenceId: savedActivity.id,
+                          );
+                        } catch (notificationError) {
+                          notificationWarning =
+                              'Nhật ký đã lưu nhưng chưa tạo được '
+                              'thông báo: $notificationError';
+                          debugPrint(notificationWarning);
+                        }
                       } else {
-                        savedActivity = await _logbookService.updateActivity(
-                          result,
-                        );
+                        savedActivity =
+                            await _logbookService.updateActivity(result);
                       }
 
                       if (!mounted) return;
@@ -1328,11 +1389,17 @@ class _ForestLogbookPageState extends State<ForestLogbookPage> {
                       ScaffoldMessenger.of(this.context).showSnackBar(
                         SnackBar(
                           content: Text(
-                            activity == null
-                                ? 'Đã thêm hoạt động thành công.'
-                                : 'Đã cập nhật hoạt động thành công.',
+                            notificationWarning ??
+                                (activity == null
+                                    ? 'Đã thêm nhật ký và tạo thông báo.'
+                                    : 'Đã cập nhật hoạt động thành công.'),
                           ),
-                          backgroundColor: Colors.green,
+                          backgroundColor: notificationWarning == null
+                              ? Colors.green
+                              : Colors.orange,
+                          duration: Duration(
+                            seconds: notificationWarning == null ? 3 : 8,
+                          ),
                         ),
                       );
                     } catch (e, stackTrace) {

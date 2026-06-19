@@ -1,9 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import '../widgets/card_box.dart';
-import '../widgets/fake_bar_chart.dart';
-import '../widgets/kpi_card.dart';
-import '../widgets/data_table_card.dart';
+
+import '../services/dashboard_service.dart';
 import '../widgets/app_colors.dart';
 import '../widgets/notification_bell.dart';
 
@@ -20,10 +20,30 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  DateTimeRange _selectedDateRange = DateTimeRange(
-    start: DateTime(2024, 5, 1),
-    end: DateTime(2024, 12, 31),
-  );
+  final DashboardService _dashboardService = DashboardService();
+
+  late DateTimeRange _selectedDateRange;
+  late Stream<DashboardData> _dashboardStream;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final now = DateTime.now();
+
+    _selectedDateRange = DateTimeRange(
+      start: DateTime(now.year, 1, 1),
+      end: now,
+    );
+
+    _refreshDashboardStream();
+  }
+
+  void _refreshDashboardStream() {
+    _dashboardStream = _dashboardService.watchDashboard(
+      _selectedDateRange,
+    );
+  }
 
   Future<void> _selectDateRange() async {
     final selected = await showDateRangePicker(
@@ -31,7 +51,7 @@ class _DashboardPageState extends State<DashboardPage> {
       initialDateRange: _selectedDateRange,
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
-      helpText: 'Chọn khoảng thời gian',
+      helpText: 'Chọn khoảng thời gian thống kê',
       cancelText: 'Hủy',
       confirmText: 'Chọn',
       saveText: 'Lưu',
@@ -41,103 +61,129 @@ class _DashboardPageState extends State<DashboardPage> {
 
     setState(() {
       _selectedDateRange = selected;
+      _refreshDashboardStream();
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: ListView(
-        children: [
-          _DashboardHeader(
-            dateRange: _selectedDateRange,
-            onSelectDateRange: _selectDateRange,
-            onOpenNotifications: widget.onOpenNotifications,
-          ),
-          const SizedBox(height: 22),
-          const Row(
-            children: [
-              KpiCard(
-                  title: 'Forest Owners',
-                  value: '128',
-                  icon: Icons.groups_rounded,
-                  color: Color(0xff17a64a),
-                  percent: '+12% vs last year'),
-              SizedBox(width: 14),
-              KpiCard(
-                  title: 'Forest Projects',
-                  value: '156',
-                  icon: Icons.map_rounded,
-                  color: Color(0xff2b8de8),
-                  percent: '+8% vs last year'),
-              SizedBox(width: 14),
-              KpiCard(
-                  title: 'Total Area',
-                  value: '12,543.65 ha',
-                  icon: Icons.eco_rounded,
-                  color: Color(0xff00a651),
-                  percent: '+15% vs last year'),
-              SizedBox(width: 14),
-              KpiCard(
-                  title: 'Total Trees',
-                  value: '8,956,231',
-                  icon: Icons.park_rounded,
-                  color: Color(0xff8e44ec),
-                  percent: '+10% vs last year'),
-              SizedBox(width: 14),
-              KpiCard(
-                  title: 'Estimated Carbon',
-                  value: '215,430 tCO₂e',
-                  icon: Icons.cloud_queue,
-                  color: Color(0xffffa726),
-                  percent: '+20% vs last year'),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                  flex: 5,
-                  child: CardBox(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: const [
-                        Text('Area by Province',
-                            style: TextStyle(
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.text)),
-                        SizedBox(height: 18),
-                        _DonutArea()
-                      ]))),
-              const SizedBox(width: 20),
-              Expanded(
-                  flex: 6,
-                  child: CardBox(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: const [
-                        Text('Estimated Carbon by Project (tCO₂e)',
-                            style: TextStyle(
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.text)),
-                        SizedBox(height: 12),
-                        FakeBarChart()
-                      ]))),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: const [
-              Expanded(flex: 6, child: _RecentActivities()),
-              SizedBox(width: 20),
-              Expanded(flex: 5, child: _ProjectMapPreview()),
-            ],
-          ),
-        ],
-      ),
+    return StreamBuilder<DashboardData>(
+      stream: _dashboardStream,
+      initialData: DashboardData.empty,
+      builder: (context, snapshot) {
+        final data = snapshot.data ?? DashboardData.empty;
+
+        return LayoutBuilder(
+          builder: (context, pageConstraints) {
+            final pageWidth = pageConstraints.maxWidth;
+            final pagePadding = pageWidth >= 1200
+                ? 16.0
+                : pageWidth >= 720
+                    ? 12.0
+                    : 8.0;
+            final sectionGap = pageWidth >= 900 ? 14.0 : 10.0;
+
+            return ListView(
+              padding: EdgeInsets.all(pagePadding),
+              children: <Widget>[
+                _DashboardHeader(
+                  dateRange: _selectedDateRange,
+                  onSelectDateRange: _selectDateRange,
+                  onOpenNotifications: widget.onOpenNotifications,
+                ),
+                SizedBox(height: sectionGap),
+                if (snapshot.hasError) _ErrorBanner(error: snapshot.error),
+                if (snapshot.connectionState == ConnectionState.waiting &&
+                    data == DashboardData.empty)
+                  const LinearProgressIndicator(),
+                _KpiSection(data: data),
+                SizedBox(height: sectionGap),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Stack earlier so charts remain readable at 100% zoom
+                    // even when a sidebar is visible.
+                    final stacked = constraints.maxWidth < 980;
+
+                    if (stacked) {
+                      return Column(
+                        children: <Widget>[
+                          _AreaByProvinceCard(
+                            values: data.areaByProvince,
+                            totalArea: data.totalAreaHa,
+                          ),
+                          SizedBox(height: sectionGap),
+                          _CarbonByProjectCard(
+                            values: data.carbonByProject,
+                          ),
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Expanded(
+                          flex: 5,
+                          child: _AreaByProvinceCard(
+                            values: data.areaByProvince,
+                            totalArea: data.totalAreaHa,
+                          ),
+                        ),
+                        SizedBox(width: sectionGap),
+                        Expanded(
+                          flex: 6,
+                          child: _CarbonByProjectCard(
+                            values: data.carbonByProject,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                SizedBox(height: sectionGap),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final stacked = constraints.maxWidth < 980;
+
+                    if (stacked) {
+                      return Column(
+                        children: <Widget>[
+                          _RecentActivitiesCard(
+                            activities: data.recentActivities,
+                          ),
+                          SizedBox(height: sectionGap),
+                          _ProjectMapOverview(
+                            points: data.projectPoints,
+                          ),
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Expanded(
+                          flex: 6,
+                          child: _RecentActivitiesCard(
+                            activities: data.recentActivities,
+                          ),
+                        ),
+                        SizedBox(width: sectionGap),
+                        Expanded(
+                          flex: 5,
+                          child: _ProjectMapOverview(
+                            points: data.projectPoints,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -165,32 +211,52 @@ class _DashboardHeader extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 860;
+        final width = constraints.maxWidth;
+        final veryCompact = width < 560;
+        final compact = width < 980;
 
-        final title = const Text(
+        final title = Text(
           'Dashboard',
           style: TextStyle(
-            fontSize: 26,
+            fontSize: veryCompact ? 20 : 24,
             fontWeight: FontWeight.w800,
             color: AppColors.text,
           ),
         );
 
+        final dateBox = SizedBox(
+          width: veryCompact
+              ? width
+              : compact
+                  ? math.min(280, width * 0.54)
+                  : 245,
+          child: _DateRangeBox(
+            dateRange: dateRange,
+            onTap: onSelectDateRange,
+          ),
+        );
+
+        final userBox = SizedBox(
+          width: veryCompact
+              ? width
+              : compact
+                  ? math.min(220, width * 0.38)
+                  : 185,
+          child: _UserBox(
+            displayName: displayName,
+          ),
+        );
+
         final actions = Wrap(
-          spacing: 12,
+          spacing: 10,
           runSpacing: 10,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
-            _DateRangeBox(
-              dateRange: dateRange,
-              onTap: onSelectDateRange,
-            ),
+            dateBox,
             NotificationBell(
               onOpenAll: onOpenNotifications,
             ),
-            _UserBox(
-              displayName: displayName,
-            ),
+            userBox,
           ],
         );
 
@@ -199,7 +265,7 @@ class _DashboardHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               title,
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               actions,
             ],
           );
@@ -234,10 +300,10 @@ class _DateRangeBox extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
+          width: double.infinity,
           height: 54,
-          constraints: const BoxConstraints(minWidth: 265),
           padding: const EdgeInsets.symmetric(
-            horizontal: 18,
+            horizontal: 14,
           ),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
@@ -285,13 +351,10 @@ class _UserBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      width: double.infinity,
       height: 54,
-      constraints: const BoxConstraints(
-        minWidth: 195,
-        maxWidth: 260,
-      ),
       padding: const EdgeInsets.symmetric(
-        horizontal: 16,
+        horizontal: 13,
       ),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -338,225 +401,1169 @@ class _UserBox extends StatelessWidget {
   }
 }
 
+class _KpiSection extends StatelessWidget {
+  const _KpiSection({
+    required this.data,
+  });
+
+  final DashboardData data;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final available = constraints.maxWidth;
+        final columns = available >= 1050
+            ? 5
+            : available >= 760
+                ? 3
+                : available >= 520
+                    ? 2
+                    : 1;
+
+        final width = (available - ((columns - 1) * 14)) / columns;
+
+        return Wrap(
+          spacing: 14,
+          runSpacing: 14,
+          children: <Widget>[
+            _LiveKpiCard(
+              width: width,
+              title: 'Forest Owners',
+              value: _formatInteger(data.forestOwners),
+              icon: Icons.groups_rounded,
+              color: const Color(0xff17a64a),
+            ),
+            _LiveKpiCard(
+              width: width,
+              title: 'Forest Projects',
+              value: _formatInteger(data.forestProjects),
+              icon: Icons.map_rounded,
+              color: const Color(0xff2b8de8),
+            ),
+            _LiveKpiCard(
+              width: width,
+              title: 'Total Area',
+              value: '${_formatNumber(data.totalAreaHa)} ha',
+              icon: Icons.eco_rounded,
+              color: const Color(0xff00a651),
+            ),
+            _LiveKpiCard(
+              width: width,
+              title: 'Total Trees',
+              value: _formatInteger(data.totalTrees),
+              icon: Icons.park_rounded,
+              color: const Color(0xff8e44ec),
+            ),
+            _LiveKpiCard(
+              width: width,
+              title: 'Estimated Carbon',
+              value: '${_formatNumber(data.estimatedCarbonTon)} tCO₂e',
+              icon: Icons.cloud_queue,
+              color: const Color(0xffffa726),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _LiveKpiCard extends StatelessWidget {
+  const _LiveKpiCard({
+    required this.width,
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  final double width;
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      constraints: const BoxConstraints(
+        minHeight: 92,
+      ),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: const Color(0xffe2e9e4),
+        ),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 12,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 38,
+            height: 38,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              icon,
+              size: 21,
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 9.2,
+                    color: Color(0xff6f7c74),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Tooltip(
+                  message: value,
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        value,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontSize: 16.5,
+                          height: 1.1,
+                          color: Color(0xff17211b),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                const Text(
+                  'Cập nhật từ Firebase',
+                  style: TextStyle(
+                    fontSize: 8.6,
+                    color: Color(0xff169149),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AreaByProvinceCard extends StatelessWidget {
+  const _AreaByProvinceCard({
+    required this.values,
+    required this.totalArea,
+  });
+
+  final List<DashboardProvinceArea> values;
+  final double totalArea;
+
+  static const List<Color> _colors = <Color>[
+    Color(0xff08783f),
+    Color(0xff2baa62),
+    Color(0xff4dbb75),
+    Color(0xff2b8de8),
+    Color(0xffffb020),
+    Color(0xff5aa7a0),
+    Color(0xff805ad5),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = values.take(6).toList();
+
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Text(
+            'Area by Province',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (shown.isEmpty)
+            const _EmptyChart(
+              message: 'Chưa có dữ liệu diện tích theo tỉnh.',
+            )
+          else
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final stacked = constraints.maxWidth < 500;
+
+                final chartSize = math.max(
+                  150.0,
+                  math.min(
+                    185.0,
+                    stacked
+                        ? constraints.maxWidth * 0.58
+                        : constraints.maxWidth * 0.40,
+                  ),
+                );
+
+                final chart = SizedBox(
+                  width: chartSize,
+                  height: chartSize,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      CustomPaint(
+                        size: Size(chartSize, chartSize),
+                        painter: _DonutChartPainter(
+                          values: shown.map((item) => item.areaHa).toList(),
+                          colors: _colors,
+                        ),
+                      ),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Text(
+                            _formatNumber(totalArea),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.text,
+                            ),
+                          ),
+                          const Text(
+                            'ha',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xff748078),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+
+                final legend = Column(
+                  children: shown.asMap().entries.map(
+                    (entry) {
+                      final item = entry.value;
+                      final percent =
+                          totalArea <= 0 ? 0 : item.areaHa / totalArea * 100;
+
+                      return _LegendRow(
+                        color: _colors[entry.key % _colors.length],
+                        label: item.province,
+                        value: '${_formatNumber(item.areaHa)} ha '
+                            '(${percent.toStringAsFixed(1)}%)',
+                      );
+                    },
+                  ).toList(),
+                );
+
+                if (stacked) {
+                  return Column(
+                    children: <Widget>[
+                      chart,
+                      const SizedBox(height: 12),
+                      legend,
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: <Widget>[
+                    chart,
+                    const SizedBox(width: 24),
+                    Expanded(child: legend),
+                  ],
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DonutChartPainter extends CustomPainter {
+  const _DonutChartPainter({
+    required this.values,
+    required this.colors,
+  });
+
+  final List<double> values;
+  final List<Color> colors;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final total = values.fold<double>(
+      0,
+      (sum, value) => sum + value,
+    );
+
+    final center = Offset(
+      size.width / 2,
+      size.height / 2,
+    );
+    final shortestSide = math.min(
+      size.width,
+      size.height,
+    );
+    final strokeWidth = math.max(
+      20.0,
+      shortestSide * 0.15,
+    );
+    final radius = shortestSide / 2 - strokeWidth / 2 - 4;
+    final rect = Rect.fromCircle(
+      center: center,
+      radius: radius,
+    );
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.butt;
+
+    if (total <= 0) {
+      paint.color = const Color(0xffe8eeea);
+      canvas.drawArc(
+        rect,
+        0,
+        math.pi * 2,
+        false,
+        paint,
+      );
+      return;
+    }
+
+    double startAngle = -math.pi / 2;
+
+    for (int index = 0; index < values.length; index++) {
+      final sweep = values[index] / total * math.pi * 2;
+
+      paint.color = colors[index % colors.length];
+
+      canvas.drawArc(
+        rect,
+        startAngle,
+        sweep,
+        false,
+        paint,
+      );
+
+      startAngle += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(
+    covariant _DonutChartPainter oldDelegate,
+  ) {
+    return oldDelegate.values != values || oldDelegate.colors != colors;
+  }
+}
+
+class _LegendRow extends StatelessWidget {
+  const _LegendRow({
+    required this.color,
+    required this.label,
+    required this.value,
+  });
+
+  final Color color;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 300;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 11),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Container(
+                width: 9,
+                height: 9,
+                margin: const EdgeInsets.only(top: 4),
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: narrow
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.text,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            value,
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              color: Color(0xff718078),
+                            ),
+                          ),
+                        ],
+                      )
+                    : Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.text,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              value,
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xff718078),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _CarbonByProjectCard extends StatelessWidget {
+  const _CarbonByProjectCard({
+    required this.values,
+  });
+
+  final List<DashboardProjectCarbon> values;
+
+  @override
+  Widget build(BuildContext context) {
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Text(
+            'Estimated Carbon by Project (tCO₂e)',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: 18),
+          if (values.isEmpty)
+            const _EmptyChart(
+              message: 'Chưa có dữ liệu carbon theo dự án.',
+            )
+          else
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final maxValue = values
+                    .map((item) => item.co2eTon)
+                    .fold<double>(0, math.max);
+
+                if (constraints.maxWidth < 560) {
+                  return Column(
+                    children: values.map((item) {
+                      final progress =
+                          maxValue <= 0 ? 0.0 : item.co2eTon / maxValue;
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 13),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: Tooltip(
+                                    message: item.projectName,
+                                    child: Text(
+                                      item.projectName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xff354239),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _formatCompactNumber(
+                                    item.co2eTon,
+                                  ),
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xff354239),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: LinearProgressIndicator(
+                                value: progress.clamp(0, 1),
+                                minHeight: 12,
+                                backgroundColor: const Color(0xffe8efe9),
+                                valueColor: const AlwaysStoppedAnimation<Color>(
+                                  AppColors.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  );
+                }
+
+                return SizedBox(
+                  height: 220,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: values.map((item) {
+                      final barHeight =
+                          maxValue <= 0 ? 0.0 : item.co2eTon / maxValue * 175;
+
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: <Widget>[
+                              Text(
+                                _formatCompactNumber(
+                                  item.co2eTon,
+                                ),
+                                maxLines: 1,
+                                style: const TextStyle(
+                                  fontSize: 9.0,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xff354239),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              AnimatedContainer(
+                                duration: const Duration(
+                                  milliseconds: 350,
+                                ),
+                                height: math.max(barHeight, 4),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary,
+                                  borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(7),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Tooltip(
+                                message: item.projectName,
+                                child: Text(
+                                  item.projectName,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 9.5,
+                                    height: 1.2,
+                                    color: Color(0xff5f6c64),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecentActivitiesCard extends StatelessWidget {
+  const _RecentActivitiesCard({
+    required this.activities,
+  });
+
+  final List<DashboardActivity> activities;
+
+  @override
+  Widget build(BuildContext context) {
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Text(
+            'Recent Activities',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (activities.isEmpty)
+            const _EmptyChart(
+              message: 'Chưa có nhật ký hiện trường.',
+            )
+          else
+            LayoutBuilder(
+              builder: (context, constraints) {
+                if (constraints.maxWidth < 620) {
+                  return Column(
+                    children: activities.map(_activityCard).toList(),
+                  );
+                }
+
+                return Table(
+                  border: const TableBorder(
+                    horizontalInside: BorderSide(
+                      color: Color(0xffe7ede9),
+                      width: 0.8,
+                    ),
+                  ),
+                  columnWidths: const <int, TableColumnWidth>{
+                    0: FlexColumnWidth(0.85),
+                    1: FlexColumnWidth(1.35),
+                    2: FlexColumnWidth(0.95),
+                    3: FlexColumnWidth(0.95),
+                    4: FlexColumnWidth(0.85),
+                    5: FlexColumnWidth(0.45),
+                  },
+                  defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                  children: <TableRow>[
+                    TableRow(
+                      decoration: const BoxDecoration(
+                        color: Color(0xfff7faf8),
+                      ),
+                      children: const <Widget>[
+                        _TableHeader('Date'),
+                        _TableHeader('Project'),
+                        _TableHeader('Activity'),
+                        _TableHeader('User'),
+                        _TableHeader('Location'),
+                        _TableHeader('Photos'),
+                      ],
+                    ),
+                    ...activities.map(
+                      (activity) => TableRow(
+                        children: <Widget>[
+                          _TableCell(
+                            activity.date == null
+                                ? '-'
+                                : _formatDate(
+                                    activity.date!,
+                                  ),
+                          ),
+                          _TableCell(activity.project),
+                          _TableCell(
+                            activity.activityType,
+                          ),
+                          _TableCell(activity.user),
+                          _TableCell(activity.location),
+                          _TableCell(
+                            '+${activity.photoCount}',
+                            centered: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _activityCard(DashboardActivity activity) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xfffafcfb),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(
+          color: const Color(0xffe3eae5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            activity.activityType.isEmpty ? 'Hoạt động' : activity.activityType,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            activity.project.isEmpty ? '-' : activity.project,
+            style: const TextStyle(
+              color: Color(0xff68756d),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            '${activity.user} • ${activity.location} • '
+            '${activity.photoCount} ảnh',
+            style: const TextStyle(
+              fontSize: 11,
+              color: Color(0xff89958d),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TableHeader extends StatelessWidget {
+  const _TableHeader(this.value);
+
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 36,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 7,
+      ),
+      child: Text(
+        value,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          color: Color(0xff657269),
+        ),
+      ),
+    );
+  }
+}
+
+class _TableCell extends StatelessWidget {
+  const _TableCell(
+    this.value, {
+    this.centered = false,
+  });
+
+  final String value;
+  final bool centered;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: value,
+      child: Container(
+        constraints: const BoxConstraints(
+          minHeight: 40,
+        ),
+        alignment: centered ? Alignment.center : Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(
+          horizontal: 5,
+          vertical: 7,
+        ),
+        child: Text(
+          value.isEmpty ? '-' : value,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          textAlign: centered ? TextAlign.center : TextAlign.left,
+          style: const TextStyle(
+            fontSize: 10.2,
+            height: 1.2,
+            color: Color(0xff354239),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProjectMapOverview extends StatelessWidget {
+  const _ProjectMapOverview({
+    required this.points,
+  });
+
+  final List<DashboardProjectPoint> points;
+
+  @override
+  Widget build(BuildContext context) {
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Text(
+            'Project Map Overview',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final mapHeight = constraints.maxWidth < 520 ? 200.0 : 225.0;
+
+              return Container(
+                height: mapHeight,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: const LinearGradient(
+                    colors: <Color>[
+                      Color(0xff0b5d38),
+                      Color(0xff113d2c),
+                    ],
+                  ),
+                ),
+                child: points.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(18),
+                          child: Text(
+                            'Chưa có latitude/longitude trong '
+                            'forest_projects để hiển thị vị trí.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      )
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          final latitudes =
+                              points.map((point) => point.latitude).toList();
+                          final longitudes =
+                              points.map((point) => point.longitude).toList();
+
+                          final minLat = latitudes.reduce(math.min);
+                          final maxLat = latitudes.reduce(math.max);
+                          final minLng = longitudes.reduce(math.min);
+                          final maxLng = longitudes.reduce(math.max);
+
+                          return Stack(
+                            children: <Widget>[
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  painter: _MapGridPainter(),
+                                ),
+                              ),
+                              ...points.map((point) {
+                                final xRange = math.max(maxLng - minLng, 0.01);
+                                final yRange = math.max(maxLat - minLat, 0.01);
+
+                                final left = 22 +
+                                    (point.longitude - minLng) /
+                                        xRange *
+                                        (constraints.maxWidth - 64);
+                                final top = 22 +
+                                    (maxLat - point.latitude) /
+                                        yRange *
+                                        (constraints.maxHeight - 64);
+
+                                return Positioned(
+                                  left: left,
+                                  top: top,
+                                  child: Tooltip(
+                                    message: point.projectName,
+                                    child: const Icon(
+                                      Icons.location_on,
+                                      color: Colors.white,
+                                      size: 34,
+                                    ),
+                                  ),
+                                );
+                              }),
+                              Positioned(
+                                right: 12,
+                                bottom: 12,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 7,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '${points.length} project(s)',
+                                    style: const TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w800,
+                                      color: AppColors.text,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MapGridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final linePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..color = Colors.white.withOpacity(0.12);
+
+    for (int index = 1; index < 8; index++) {
+      final y = size.height / 8 * index;
+      canvas.drawLine(
+        Offset(0, y),
+        Offset(size.width, y),
+        linePaint,
+      );
+    }
+
+    for (int index = 1; index < 10; index++) {
+      final x = size.width / 10 * index;
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x, size.height),
+        linePaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(
+    covariant CustomPainter oldDelegate,
+  ) =>
+      false;
+}
+
+class _DashboardCard extends StatelessWidget {
+  const _DashboardCard({
+    required this.child,
+  });
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final padding = constraints.maxWidth < 520 ? 10.0 : 12.0;
+
+        return Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(padding),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: const Color(0xffe2e9e4),
+            ),
+            boxShadow: const <BoxShadow>[
+              BoxShadow(
+                color: Color(0x07000000),
+                blurRadius: 12,
+                offset: Offset(0, 3),
+              ),
+            ],
+          ),
+          child: child,
+        );
+      },
+    );
+  }
+}
+
+class _EmptyChart extends StatelessWidget {
+  const _EmptyChart({
+    required this.message,
+  });
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 210,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Icon(
+              Icons.query_stats,
+              size: 42,
+              color: Color(0xff9ba79f),
+            ),
+            const SizedBox(height: 9),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xff748078),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner({
+    required this.error,
+  });
+
+  final Object? error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xffffeeee),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: const Color(0xffffcccc),
+        ),
+      ),
+      child: Text(
+        'Không thể đọc một phần dữ liệu Dashboard: $error',
+        style: const TextStyle(
+          color: Color(0xffb42318),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
 String _formatDate(DateTime value) {
   return '${value.day.toString().padLeft(2, '0')}/'
       '${value.month.toString().padLeft(2, '0')}/'
       '${value.year}';
 }
 
-class _DonutArea extends StatelessWidget {
-  const _DonutArea();
+String _formatInteger(num value) {
+  final raw = value.round().toString();
+  final buffer = StringBuffer();
 
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 190,
-          height: 190,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              CircularProgressIndicator(
-                  value: 1,
-                  strokeWidth: 34,
-                  color: Colors.teal.shade200,
-                  backgroundColor: Colors.green.shade100),
-              SizedBox(
-                  width: 190,
-                  height: 190,
-                  child: CircularProgressIndicator(
-                      value: .78,
-                      strokeWidth: 34,
-                      color: AppColors.primary,
-                      backgroundColor: Colors.transparent)),
-              SizedBox(
-                  width: 158,
-                  height: 158,
-                  child: CircularProgressIndicator(
-                      value: .42,
-                      strokeWidth: 34,
-                      color: Colors.orange,
-                      backgroundColor: Colors.transparent)),
-              const Text('12,543.65\nha',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontWeight: FontWeight.w900, color: AppColors.text)),
-            ],
-          ),
-        ),
-        const SizedBox(width: 26),
-        Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                _Legend(
-                    color: AppColors.primary,
-                    text: 'Lam Dong      3,245.50 ha (25.9%)'),
-                _Legend(
-                    color: Color(0xff4dbb75),
-                    text: 'Gia Lai          2,875.30 ha (22.9%)'),
-                _Legend(
-                    color: Color(0xff2b8de8),
-                    text: 'Dak Lak        2,210.15 ha (17.8%)'),
-                _Legend(
-                    color: Colors.orange,
-                    text: 'Quang Tri     1,845.40 ha (14.7%)'),
-                _Legend(
-                    color: Colors.teal,
-                    text: 'Others          1,046.80 ha (8.4%)'),
-              ]),
-        ),
-      ],
-    );
-  }
-}
+  for (int index = 0; index < raw.length; index++) {
+    final reverseIndex = raw.length - index;
 
-class _Legend extends StatelessWidget {
-  final Color color;
-  final String text;
-  const _Legend({required this.color, required this.text});
-  @override
-  Widget build(BuildContext context) => Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(children: [
-        Container(
-            width: 9,
-            height: 9,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        const SizedBox(width: 8),
-        Text(text, style: const TextStyle(fontSize: 12, color: AppColors.text))
-      ]));
-}
+    buffer.write(raw[index]);
 
-class _RecentActivities extends StatelessWidget {
-  const _RecentActivities();
-  @override
-  Widget build(BuildContext context) => DataTableCard(columns: const [
-        'Date',
-        'Project',
-        'Activity Type',
-        'User',
-        'Location',
-        'Photos'
-      ], rows: const [
-        [
-          '20/05/2024',
-          'Dak Lak Project 01',
-          'Planting',
-          'Nguyễn Văn A',
-          'Dak Lak',
-          '+3'
-        ],
-        [
-          '18/05/2024',
-          'Lam Dong Project 02',
-          'Maintenance',
-          'Tran Thi B',
-          'Lam Dong',
-          '+2'
-        ],
-        [
-          '15/05/2024',
-          'Gia Lai Project 01',
-          'Patrol',
-          'Le Van C',
-          'Gia Lai',
-          '+4'
-        ],
-        [
-          '12/05/2024',
-          'Quang Tri Project 01',
-          'Fertilizing',
-          'Pham Van D',
-          'Quang Tri',
-          '+1'
-        ],
-      ]);
-}
-
-class _ProjectMapPreview extends StatelessWidget {
-  const _ProjectMapPreview();
-  @override
-  Widget build(BuildContext context) {
-    return CardBox(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Project Map Overview',
-            style:
-                TextStyle(fontWeight: FontWeight.w900, color: AppColors.text)),
-        const SizedBox(height: 14),
-        Container(
-          height: 260,
-          decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              gradient: const LinearGradient(
-                  colors: [Color(0xff0b5d38), Color(0xff113d2c)])),
-          child: Stack(children: [
-            Positioned.fill(child: CustomPaint(painter: _MapLinesPainter())),
-            const Positioned(
-                left: 95,
-                top: 85,
-                child: Icon(Icons.location_on, color: Colors.white, size: 44)),
-            const Positioned(
-                right: 92,
-                top: 55,
-                child: Icon(Icons.location_on, color: Colors.white, size: 44)),
-            const Positioned(
-                left: 235,
-                bottom: 55,
-                child: Icon(Icons.location_on, color: Colors.white, size: 44)),
-            Positioned(
-                right: 14,
-                bottom: 14,
-                child: Column(children: [
-                  _mapBtn(Icons.add),
-                  const SizedBox(height: 6),
-                  _mapBtn(Icons.remove)
-                ])),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  static Widget _mapBtn(IconData icon) => Container(
-      width: 34,
-      height: 34,
-      decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(8)),
-      child: Icon(icon, size: 18, color: AppColors.text));
-}
-
-class _MapLinesPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = Colors.white.withOpacity(.18);
-    for (var i = 0; i < 12; i++) {
-      final y = size.height / 12 * i;
-      canvas.drawLine(
-          Offset(0, y), Offset(size.width, y + (i.isEven ? 30 : -20)), paint);
+    if (reverseIndex > 1 && reverseIndex % 3 == 1) {
+      buffer.write(',');
     }
-    final border = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..color = Colors.lightGreenAccent.withOpacity(.55);
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(
-            Rect.fromLTWH(55, 38, 135, 118), const Radius.circular(28)),
-        border);
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(
-            Rect.fromLTWH(210, 68, 140, 130), const Radius.circular(28)),
-        border..color = Colors.purpleAccent.withOpacity(.5));
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(
-            Rect.fromLTWH(350, 34, 135, 120), const Radius.circular(28)),
-        border..color = Colors.blueAccent.withOpacity(.5));
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  return buffer.toString();
+}
+
+String _formatNumber(double value) {
+  if (value == 0) return '0';
+
+  final decimals = value == value.roundToDouble() ? 0 : 2;
+  final fixed = value.toStringAsFixed(decimals);
+  final parts = fixed.split('.');
+  final integer = _formatInteger(
+    int.tryParse(parts.first) ?? 0,
+  );
+
+  if (parts.length == 1) return integer;
+
+  return '$integer.${parts.last}';
+}
+
+String _formatCompactNumber(double value) {
+  if (value >= 1000000) {
+    return '${(value / 1000000).toStringAsFixed(1)}M';
+  }
+
+  if (value >= 1000) {
+    return '${(value / 1000).toStringAsFixed(1)}K';
+  }
+
+  return _formatNumber(value);
 }
