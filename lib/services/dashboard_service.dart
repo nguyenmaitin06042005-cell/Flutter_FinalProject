@@ -107,6 +107,8 @@ class DashboardService {
         <QueryDocumentSnapshot<Map<String, dynamic>>>[];
     List<QueryDocumentSnapshot<Map<String, dynamic>>> inventory =
         <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> plots =
+        <QueryDocumentSnapshot<Map<String, dynamic>>>[];
     List<QueryDocumentSnapshot<Map<String, dynamic>>> calculations =
         <QueryDocumentSnapshot<Map<String, dynamic>>>[];
     List<QueryDocumentSnapshot<Map<String, dynamic>>> activities =
@@ -122,6 +124,7 @@ class DashboardService {
           range: range,
           owners: owners,
           projects: projects,
+          plots: plots,
           inventory: inventory,
           calculations: calculations,
           activities: activities,
@@ -164,6 +167,16 @@ class DashboardService {
           ).listen(
             (snapshot) {
               inventory = snapshot.docs;
+              emit();
+            },
+            onError: controller.addError,
+          ),
+        );
+
+        subscriptions.add(
+          _firestore.collection('inventory_plots').snapshots().listen(
+            (snapshot) {
+              plots = snapshot.docs;
               emit();
             },
             onError: controller.addError,
@@ -242,6 +255,7 @@ class DashboardService {
     required DateTimeRange range,
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> owners,
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> projects,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> plots,
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> inventory,
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> calculations,
     required List<QueryDocumentSnapshot<Map<String, dynamic>>> activities,
@@ -282,8 +296,28 @@ class DashboardService {
       );
     }).toList();
 
+    final plotProjectMap = <String, String>{};
+    for (var doc in plots) {
+      final data = doc.data();
+      final project = _readString(data, const <String>['project', 'projectName']);
+      plotProjectMap[doc.id] = project;
+      final plotCode = _readString(data, const <String>['code', 'plotCode', 'plot']);
+      if (plotCode.isNotEmpty) {
+        plotProjectMap[plotCode] = project;
+      }
+    }
+
     final filteredInventory = inventory.where((document) {
-      if (isOwner && !allowedProjects.contains(_projectName(document.data()))) return false;
+      if (isOwner) {
+        final data = document.data();
+        String project = _projectName(data);
+        if (project.isEmpty) {
+          final plotId = _readString(data, const <String>['plotId']);
+          final plotCode = _readString(data, const <String>['plotCode', 'code', 'plot']);
+          project = plotProjectMap[plotId] ?? plotProjectMap[plotCode] ?? '';
+        }
+        if (!allowedProjects.contains(project)) return false;
+      }
       return _matchesDate(
         document.data(),
         const <String>[
