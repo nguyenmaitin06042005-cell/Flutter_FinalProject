@@ -910,6 +910,7 @@ class _ReportsPageState extends State<ReportsPage> {
   Future<_PdfReportData> _buildInventoryData() async {
     final documents = await _readFirstNonEmptyCollection(
       <String>[
+        'inventory_trees',
         'forest_inventory',
         'forest_inventory_tree_data',
         'inventory',
@@ -990,10 +991,10 @@ class _ReportsPageState extends State<ReportsPage> {
   Future<_PdfReportData> _buildActivityData() async {
     final documents = await _readFirstNonEmptyCollection(
       <String>[
+        'logbook_activities',
         'forest_activities',
         'activities',
         'forest_logbook',
-        'logbook_activities',
       ],
     );
 
