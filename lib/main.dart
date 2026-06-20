@@ -270,7 +270,7 @@ class _MainLayoutState extends State<MainLayout> {
         'menu': menus[6],
         'page': CarbonCalculationPage(currentUser: widget.userModel)
       }, // Carbon Calculation
-      {'menu': menus[7], 'page': const ReportsPage()}, // Reports
+      {'menu': menus[7], 'page': ReportsPage(currentUser: widget.userModel)}, // Reports
       {'menu': menus[8], 'page': const FilesPage()}, // Files
       {'menu': menus[9], 'page': const UsersPage()}, // Users
       {

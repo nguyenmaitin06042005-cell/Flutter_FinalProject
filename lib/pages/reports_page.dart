@@ -7,8 +7,8 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart' show PdfGoogleFonts;
 
 import '../utils/pdf_exporter.dart';
-
 import '../widgets/app_colors.dart';
+import '../models/user_model.dart';
 
 enum ReportType {
   forestSummary,
@@ -17,7 +17,8 @@ enum ReportType {
 }
 
 class ReportsPage extends StatefulWidget {
-  const ReportsPage({super.key});
+  final UserModel? currentUser;
+  const ReportsPage({super.key, this.currentUser});
 
   @override
   State<ReportsPage> createState() => _ReportsPageState();
@@ -35,6 +36,7 @@ class _ReportsPageState extends State<ReportsPage> {
   bool _isLoadingProjects = true;
 
   List<String> _projects = <String>[];
+  Map<String, String> _projectOwners = <String, String>{};
 
   final Map<ReportType, DateTime?> _lastGenerated = <ReportType, DateTime?>{
     ReportType.forestSummary: null,
@@ -90,25 +92,33 @@ class _ReportsPageState extends State<ReportsPage> {
 
   Future<void> _loadProjects() async {
     try {
-      final snapshot = await _firestore.collection('forest_projects').get();
+      Query query = _firestore.collection('forest_projects');
+      if (widget.currentUser?.isOwner == true) {
+        query = query.where('ownerUid', isEqualTo: widget.currentUser!.uid);
+      }
+      final snapshot = await query.get();
+      final projects = <String>[];
+      final projectOwners = <String, String>{};
 
-      final projects = snapshot.docs
-          .map((document) {
-            final data = document.data();
-            return _readString(
-              data,
-              <String>['projectName', 'project', 'name'],
-            );
-          })
-          .where((name) => name.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
+      for (var document in snapshot.docs) {
+        final data = document.data() as Map<String, dynamic>?;
+        if (data != null) {
+          final name = _readString(data, <String>['projectName', 'project', 'name']);
+          final owner = _readString(data, <String>['owner', 'ownerName']);
+          if (name.isNotEmpty) {
+            projects.add(name);
+            projectOwners[name] = owner;
+          }
+        }
+      }
+
+      final uniqueProjects = projects.toSet().toList()..sort();
 
       if (!mounted) return;
 
       setState(() {
-        _projects = projects;
+        _projects = uniqueProjects;
+        _projectOwners = projectOwners;
         _isLoadingProjects = false;
 
         if (_selectedProject != 'All Projects' &&
@@ -879,7 +889,10 @@ class _ReportsPageState extends State<ReportsPage> {
       totalArea += area;
       totalCarbon += carbon;
 
+      final owner = _projectOwners[project] ?? '-';
+
       rows.add(<String>[
+        owner.isEmpty ? '-' : owner,
         project.isEmpty ? '-' : project,
         province.isEmpty ? '-' : province,
         _formatNumber(area),
@@ -892,6 +905,7 @@ class _ReportsPageState extends State<ReportsPage> {
       title: 'Forest Summary Report',
       fileName: 'forest_summary_report',
       columns: const <String>[
+        'Owner',
         'Project',
         'Province',
         'Area (ha)',
@@ -959,7 +973,10 @@ class _ReportsPageState extends State<ReportsPage> {
 
       totalQuantity += quantity;
 
+      final owner = _projectOwners[project] ?? '-';
+
       rows.add(<String>[
+        owner.isEmpty ? '-' : owner,
         plot.isEmpty ? '-' : plot,
         project.isEmpty ? '-' : project,
         species.isEmpty ? '-' : species,
@@ -973,6 +990,7 @@ class _ReportsPageState extends State<ReportsPage> {
       title: 'Forest Inventory Report',
       fileName: 'forest_inventory_report',
       columns: const <String>[
+        'Owner',
         'Plot',
         'Project',
         'Species',
@@ -1031,8 +1049,11 @@ class _ReportsPageState extends State<ReportsPage> {
         <String>['description', 'note', 'content'],
       );
 
+      final owner = _projectOwners[project] ?? '-';
+
       rows.add(<String>[
         date == null ? '-' : _formatDate(date),
+        owner.isEmpty ? '-' : owner,
         project.isEmpty ? '-' : project,
         activityType.isEmpty ? '-' : activityType,
         user.isEmpty ? '-' : user,
@@ -1046,6 +1067,7 @@ class _ReportsPageState extends State<ReportsPage> {
       fileName: 'activity_report',
       columns: const <String>[
         'Date',
+        'Owner',
         'Project',
         'Activity',
         'User',
@@ -1317,7 +1339,13 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 
   bool _matchesProject(String project) {
-    return _selectedProject == 'All Projects' || project == _selectedProject;
+    if (_selectedProject == 'All Projects') {
+      if (widget.currentUser?.isOwner == true) {
+        return _projects.contains(project);
+      }
+      return true;
+    }
+    return project == _selectedProject;
   }
 
   bool _matchesDate(
